@@ -1,0 +1,6 @@
+{
+  "name": "Edge UPI Behaviour Risk System",
+  "description": "An advanced behaviour profiling, network analysis, and personalized pre-payment risk assessment system for UPI transactions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,47 @@
+# Node & JavaScript dependencies
+node_modules/
+dist/
+build/
+.cache/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# Uploaded/Generated statement data & database files
+data/uploaded_statements/
+data/behavior_profiles.json
+data/statement_transactions.json
+data/users.json
+data/risk_history.json
+data/trust_store.json
+*.db
+*.sqlite3
+
+# Environment and IDE
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

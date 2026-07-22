@@ -1,0 +1,11 @@
+date,time,amount,merchant,upi_id,status,reference_number
+01/06/2026,09:12,420,Swiggy,swiggy@ibl,SUCCESS,UTR100001
+01/06/2026,13:45,850,Amazon Pay,amazonpay@apl,SUCCESS,UTR100002
+02/06/2026,20:15,199,Jio Recharge,jio@paytm,SUCCESS,UTR100003
+03/06/2026,08:05,1200,Flipkart,flipkart@axis,SUCCESS,UTR100004
+03/06/2026,22:48,310,Zomato,zomato@hdfcbank,SUCCESS,UTR100005
+04/06/2026,11:30,650,Swiggy,swiggy@ibl,SUCCESS,UTR100006
+05/06/2026,10:20,499,Amazon Pay,amazonpay@apl,SUCCESS,UTR100007
+05/06/2026,18:55,1499,IRCTC,irctc@oksbi,SUCCESS,UTR100008
+06/06/2026,14:12,275,BigBasket,bigbasket@ybl,SUCCESS,UTR100009
+07/06/2026,21:05,999,Myntra,myntra@icici,SUCCESS,UTR100010
