@@ -17,6 +17,7 @@ export default function UserProfile() {
   const [profile, setProfile] = useState<BehaviorProfile | null>(null);
   const [transactions, setTransactions] = useState<StatementTransaction[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [txSearch, setTxSearch] = useState("");
   const [txSort, setTxSort] = useState<{ key: string; dir: "asc" | "desc" }>({ key: "timestamp", dir: "desc" });
   const [txPage, setTxPage] = useState(0);
@@ -30,23 +31,26 @@ export default function UserProfile() {
 
     const fetchData = async () => {
       try {
-        let pRes = await fetch(`/api/profiles/${userId}`);
+        setError(null);
+        const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+
+        let pRes = await fetch(`/api/profiles/${userId}`, { headers });
         if (!pRes.ok && username && username !== userId) {
-          pRes = await fetch(`/api/profiles/${username}`);
+          pRes = await fetch(`/api/profiles/${username}`, { headers });
         }
         if (pRes.ok) {
           setProfile(await pRes.json());
         }
 
-        let tRes = await fetch(`/api/statement-transactions/${userId}`);
+        let tRes = await fetch(`/api/statement-transactions/${userId}`, { headers });
         if ((!tRes.ok || tRes.headers.get("content-type")?.includes("html")) && username && username !== userId) {
-          tRes = await fetch(`/api/statement-transactions/${username}`);
+          tRes = await fetch(`/api/statement-transactions/${username}`, { headers });
         }
         if (tRes.ok && !tRes.headers.get("content-type")?.includes("html")) {
           setTransactions(await tRes.json());
         }
-      } catch {
-        // Ignore errors
+      } catch (err: any) {
+        setError(err.message || "Failed to load profiles");
       } finally {
         setLoading(false);
       }
@@ -60,6 +64,7 @@ export default function UserProfile() {
   const getFrequencyData = () => {
     if (!profile?.merchant_frequency) return [];
     return Object.entries(profile.merchant_frequency)
+      .sort((a, b) => b[1] - a[1])
       .slice(0, 8)
       .map(([name, count]) => ({
         name: name.length > 14 ? name.substring(0, 12) + "…" : name,
@@ -69,10 +74,12 @@ export default function UserProfile() {
 
   const getMonthlyData = () => {
     if (!profile?.monthly_totals) return [];
-    return Object.entries(profile.monthly_totals).map(([month, total]) => ({
-      month,
-      total: Math.round(total),
-    }));
+    return Object.entries(profile.monthly_totals)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([month, total]) => ({
+        month,
+        total: Math.round(total),
+      }));
   };
 
   const getHourlyData = () => {
@@ -90,6 +97,7 @@ export default function UserProfile() {
   const getMerchantPieData = () => {
     if (!profile?.merchant_frequency) return [];
     return Object.entries(profile.merchant_frequency)
+      .sort((a, b) => b[1] - a[1])
       .slice(0, 6)
       .map(([name, value]) => ({ name, value }));
   };
@@ -104,11 +112,16 @@ export default function UserProfile() {
         tx.merchant?.toLowerCase().includes(q) ||
         tx.upi_id?.toLowerCase().includes(q) ||
         tx.reference_number?.toLowerCase().includes(q) ||
-        String(tx.amount).includes(q)
+        tx.amount?.toString().includes(q)
       );
     })
     .sort((a, b) => {
       const key = txSort.key as keyof StatementTransaction;
+      if (key === "amount") {
+        const aVal = a.amount ?? 0;
+        const bVal = b.amount ?? 0;
+        return txSort.dir === "asc" ? aVal - bVal : bVal - aVal;
+      }
       const aVal = a[key] ?? "";
       const bVal = b[key] ?? "";
       if (txSort.dir === "asc") return String(aVal).localeCompare(String(bVal));
@@ -146,11 +159,19 @@ export default function UserProfile() {
   };
 
   // ── Derived Stats ──
-  const totalSpent = transactions.reduce((sum, tx) => sum + (tx.amount || 0), 0);
+  const totalSpent = transactions.filter(tx => tx.status === "SUCCESS").reduce((sum, tx) => sum + (tx.amount || 0), 0);
   const uniqueMerchants = new Set(transactions.map(tx => tx.merchant)).size;
   const uniqueUPIs = new Set(transactions.filter(tx => tx.upi_id).map(tx => tx.upi_id)).size;
 
   // ── Loading State ──
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-full min-h-[400px] text-red-400 font-semibold p-4">
+        Error: {error}
+      </div>
+    );
+  }
 
   if (loading) {
     return (

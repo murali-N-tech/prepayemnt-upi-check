@@ -8,6 +8,8 @@
     "start": "vite preview"
   },
   "dependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "bcrypt": "^6.0.0",
     "express": "^4.19.2",
     "form-data": "^4.0.6",
     "lucide-react": "^0.395.0",

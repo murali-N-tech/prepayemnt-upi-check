@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import multer from "multer";
+import bcrypt from "bcrypt";
 import { createServer as createViteServer } from "vite";
 import { createRequire } from "module";
 
@@ -102,7 +103,7 @@ function resolveTokenToUser(authHeader: string | undefined): TokenMapping | null
 }
 
 // POST /api/auth/register
-app.post(["/auth/register", "/api/auth/register"], (req, res) => {
+app.post(["/auth/register", "/api/auth/register"], async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ detail: "Username and password are required" });
@@ -115,7 +116,8 @@ app.post(["/auth/register", "/api/auth/register"], (req, res) => {
   }
 
   const user_id = "user_" + crypto.randomBytes(8).toString("hex");
-  const newUser: StoredUser = { user_id, username, password };
+  const hashed = await bcrypt.hash(password, 10);
+  const newUser: StoredUser = { user_id, username, password: hashed };
   users.push(newUser);
   saveUsers(users);
 
@@ -126,7 +128,7 @@ app.post(["/auth/register", "/api/auth/register"], (req, res) => {
 });
 
 // POST /api/auth/login
-app.post(["/auth/login", "/api/auth/login"], (req, res) => {
+app.post(["/auth/login", "/api/auth/login"], async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ detail: "Username and password are required" });
@@ -134,10 +136,10 @@ app.post(["/auth/login", "/api/auth/login"], (req, res) => {
 
   const users = readUsers();
   const user = users.find(
-    u => u.username.toLowerCase() === username.toLowerCase() && u.password === password
+    u => u.username.toLowerCase() === username.toLowerCase()
   );
 
-  if (!user) {
+  if (!user || !(await bcrypt.compare(password, user.password))) {
     return res.status(401).json({ detail: "Invalid username or password" });
   }
 
@@ -359,20 +361,21 @@ app.post(["/predict", "/api/predict"], (req, res) => {
 
   // Calculate rolling statistics from tail 5
   const allTxs = readCsvTransactions();
+  const senderTxs = allTxs.filter(t => t.sender === txSender);
   let rolling_avg_amount = currentAmount;
   let rolling_txn_count = 1;
   let time_gap = 100;
 
-  if (allTxs.length > 0) {
-    const last5 = allTxs.slice(-5);
+  if (senderTxs.length > 0) {
+    const last5 = senderTxs.slice(-5);
     const sum = last5.reduce((acc, t) => acc + t.amount, 0);
     rolling_avg_amount = sum / last5.length;
     rolling_txn_count = last5.length;
 
     try {
-      const lastTxTime = new Date(allTxs[allTxs.length - 1].timestamp).getTime();
+      const lastTxTime = new Date(senderTxs[senderTxs.length - 1].timestamp).getTime();
       const currentTxTime = new Date(txTimestamp).getTime();
-      time_gap = Math.max(1, Math.floor((currentTxTime - lastTxTime) / 1000));
+      time_gap = Math.max(1, Math.floor(Math.abs(currentTxTime - lastTxTime) / 1000));
     } catch {
       time_gap = 100;
     }
@@ -380,12 +383,19 @@ app.post(["/predict", "/api/predict"], (req, res) => {
 
   // Simulated machine-learning decision boundary resembling original Ensemble
   let base_prob = 0.15;
-  if (currentAmount > 10000) base_prob += 0.12;
+  // Use independent logic checks
   if (currentAmount > 70000) base_prob += 0.35;
+  else if (currentAmount > 10000) base_prob += 0.12;
+
   if (velScore > 5) base_prob += 0.20;
   if (devScore > 0.7) base_prob += 0.08;
   if (locScore > 0.7) base_prob += 0.08;
   if (is_night === 1) base_prob += 0.10;
+
+  // Add personalized features if available
+  base_prob += (rolling_avg_amount > 0 && Math.abs(currentAmount - rolling_avg_amount)/rolling_avg_amount > 1) ? 0.05 : 0;
+  base_prob += (rolling_txn_count > 10) ? 0.03 : 0;
+  base_prob += (time_gap < 60) ? 0.05 : 0;
 
   let risk_score = Math.floor(Math.min(0.95, Math.max(0.05, base_prob)) * 100);
   let risk = (currentAmount > 70000 || velScore > 7 || risk_score >= 70) ? 1 : 0;
@@ -540,7 +550,11 @@ app.get(["/behavior/:tx_id", "/api/behavior/:tx_id"], (req, res) => {
 
   res.json({
     transaction_id: tx_id,
-    behavior_risk: status
+    behavior_risk: status,
+    velocity_score: tx.velocity_score,
+    device_score: tx.device_score,
+    location_score: tx.location_score,
+    risk_score: tx.risk_score
   });
 });
 
@@ -632,6 +646,11 @@ app.post(["/personalized-risk-check", "/api/personalized-risk-check"], (req, res
 
 // POST Upload Statement (PDF/CSV)
 app.post(["/statement/upload", "/api/statement/upload"], upload.single("file"), async (req, res) => {
+  const authUser = resolveTokenToUser(req.headers.authorization);
+  if (!authUser) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
   const user_id = req.body.user_id;
   const retain_source = req.body.retain_source === "true";
   const file = req.file;
@@ -639,6 +658,11 @@ app.post(["/statement/upload", "/api/statement/upload"], upload.single("file"), 
   if (!user_id) {
     return res.status(400).json({ error: "user_id form field is required" });
   }
+
+  if (authUser.user_id !== user_id) {
+    return res.status(403).json({ error: "Forbidden: Cannot upload statement for other user accounts" });
+  }
+
   if (!file) {
     return res.status(400).json({ error: "No statement file uploaded" });
   }
@@ -677,8 +701,17 @@ app.post(["/statement/upload", "/api/statement/upload"], upload.single("file"), 
           if (dateVal.includes("/")) {
             const parts = dateVal.split("/");
             if (parts.length === 3 && parts[2].length === 4) {
-              // Assume DD/MM/YYYY
-              dateVal = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+              // Attempt to auto-detect MM/DD vs DD/MM based on value > 12
+              const p0 = parseInt(parts[0], 10);
+              const p1 = parseInt(parts[1], 10);
+              let day = parts[0];
+              let month = parts[1];
+              if (p0 <= 12 && p1 > 12) {
+                // Definitely MM/DD/YYYY
+                month = parts[0];
+                day = parts[1];
+              }
+              dateVal = `${parts[2]}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
             }
           } else if (dateVal.includes("-") && dateVal.split("-")[0].length !== 4) {
              const parts = dateVal.split("-");
@@ -752,6 +785,11 @@ app.post(["/statement/upload", "/api/statement/upload"], upload.single("file"), 
 
         backendReq.on("error", (err: Error) => {
           reject(new Error(`Could not reach Python backend at localhost:8000: ${err.message}. Make sure 'python backend/main.py' is running.`));
+        });
+
+        backendReq.setTimeout(30000, () => {
+           backendReq.destroy();
+           reject(new Error("Python backend request timed out after 30s"));
         });
 
         formData.pipe(backendReq);
@@ -1056,16 +1094,20 @@ function evaluatePersonalizedRiskLogic(
     reasons.push("Transaction time falls in the user's higher-risk night window");
   }
 
-  if (most_active_hour !== null && Math.abs(hour - most_active_hour) >= 8) {
-    score += 8;
-    reasons.push("Transaction time is far from the user's most active payment hour");
+  if (most_active_hour !== null) {
+    const diff = Math.abs(hour - most_active_hour);
+    const wrapDiff = Math.min(diff, 24 - diff);
+    if (wrapDiff >= 8) {
+      score += 8;
+      reasons.push("Transaction time is far from the user's most active payment hour");
+    }
   }
 
   // Same-day activity velocity count
-  const eventDateStr = event_time.toISOString().split("T")[0];
+  const eventDateStr = event_time.toLocaleDateString("en-CA"); // YYYY-MM-DD local format
   const sameDayTxs = history.filter(t => {
     try {
-      return new Date(t.timestamp).toISOString().split("T")[0] === eventDateStr;
+      return new Date(t.timestamp).toLocaleDateString("en-CA") === eventDateStr;
     } catch {
       return false;
     }
