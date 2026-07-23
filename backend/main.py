@@ -12,7 +12,8 @@ import numpy as np
 import pandas as pd
 import shap
 from pathlib import Path
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi import Depends
 
 
@@ -60,6 +61,14 @@ from backend.advanced_ai.gnn_fraud_detector import gnn_risk
 
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --------------------------------------------------
 # Load ML Model
@@ -165,30 +174,40 @@ def predict(tx: Transaction):
     try:
         current_time = pd.to_datetime(tx.timestamp)
         hour = current_time.hour
-    except:
+    except Exception:
         current_time = pd.Timestamp.now()
         hour = 12
 
     is_night = 1 if hour < 6 or hour > 22 else 0
 
     df = get_all_transactions()
+    sender_df = df[df["sender"] == tx.sender] if not df.empty else pd.DataFrame()
 
-    if df.empty:
-
+    if sender_df.empty:
         rolling_avg_amount = tx.amount
         rolling_txn_count = 1
-        time_gap = 100
-
+        time_gap = 100.0
     else:
+        rolling_avg_amount = float(sender_df["amount"].tail(5).mean())
 
-        rolling_avg_amount = df["amount"].tail(5).mean()
-        rolling_txn_count = len(df.tail(5))
+        # Calculate velocity in the last 24H:
+        try:
+            sender_df_parsed = sender_df.copy()
+            sender_df_parsed['parsed_ts'] = pd.to_datetime(sender_df_parsed['timestamp'])
+            twenty_four_hours_ago = current_time - pd.Timedelta(hours=24)
+            recent_txs = sender_df_parsed[sender_df_parsed['parsed_ts'] >= twenty_four_hours_ago]
+            rolling_txn_count = int(len(recent_txs))
+        except Exception:
+            rolling_txn_count = int(len(sender_df.tail(5)))
 
         try:
-            last_time = pd.to_datetime(df.iloc[-1]["timestamp"])
-            time_gap = (current_time - last_time).total_seconds()
-        except:
-            time_gap = 100
+            sender_df_parsed = sender_df.copy()
+            sender_df_parsed['parsed_ts'] = pd.to_datetime(sender_df_parsed['timestamp'])
+            sender_df_sorted = sender_df_parsed.sort_values('parsed_ts')
+            last_time = sender_df_sorted.iloc[-1]['parsed_ts']
+            time_gap = abs((current_time - last_time).total_seconds())
+        except Exception:
+            time_gap = 100.0
 
     # ML Features
     features = [
@@ -201,12 +220,13 @@ def predict(tx: Transaction):
 
     prob = float(model.predict_proba([features])[0][1])
 
-    # normalize probability
+    # normalize probability (clamped to 0.05-0.95 to maintain calibrated threshold checks)
     prob = max(0.05, min(prob, 0.95))
 
     risk_score = int(prob * 100)
 
-    if tx.amount > 70000 or tx.velocity_score > 7:
+    # Less aggressive block threshold for UPI payments in production
+    if tx.amount > 200000 or tx.velocity_score > 7:
         risk = 1
     else:
         risk = 1 if risk_score >= 70 else 0
@@ -492,6 +512,7 @@ async def upload_statement(
         "statement_id": statement_id,
         "source_type": parsed["source_type"],
         "transactions_extracted": len(transactions),
+        "extracted_transactions": transactions,
         "warnings": parsed["warnings"],
         "profile_created": True,
         "profile": get_behavior_profile(user_id),
@@ -527,12 +548,12 @@ def personalized_risk_check(payload: PersonalizedRiskCheck):
         **result,
     }
 
-@app.get("/fraud-graph")
+@app.get("/auth/fraud-graph")
 def get_fraud_graph(user: str = Depends(get_current_user)):
     edges = get_all_edges()
     return {"edges": edges}
 
-@app.get("/gnn-fraud-detection")
+@app.get("/auth/gnn-fraud-detection")
 def get_gnn_fraud_detection(user: str = Depends(get_current_user)):
     edges = get_all_edges()
     # Simple logic: merchants with > 3 connections are suspicious
@@ -544,15 +565,15 @@ def get_gnn_fraud_detection(user: str = Depends(get_current_user)):
     suspicious = [m for m, count in merchant_counts.items() if count > 2]
     return {"suspicious_nodes": suspicious}
 
-@app.get("/health")
+@app.get("/auth/health")
 def get_health(user: str = Depends(get_current_user)):
     return {"status": "ok"}
 
-@app.get("/model-drift")
+@app.get("/auth/model-drift")
 def get_model_drift(user: str = Depends(get_current_user)):
     return {"drift_status": "Model Stable"}
 
-@app.get("/transactions")
+@app.get("/auth/transactions")
 def get_transactions(user: str = Depends(get_current_user)):
     df = get_user_transactions(user)
     if df is None or df.empty:

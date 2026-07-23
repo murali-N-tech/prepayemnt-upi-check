@@ -757,6 +757,31 @@ app.post(["/statement/upload", "/api/statement/upload"], upload.single("file"), 
         formData.pipe(backendReq);
       });
 
+      // Sync Python backend result with Express data stores
+      if (backendResult && backendResult.profile) {
+        saveBehaviorProfile(user_id, backendResult.profile);
+      }
+      
+      if (backendResult && backendResult.statement_id) {
+        const txs = backendResult.extracted_transactions || backendResult.profile?.transactions || [];
+        if (txs.length > 0) {
+          const statementRecords: StatementTransaction[] = txs.map((tx: any) => ({
+            statement_id: backendResult.statement_id,
+            user_id,
+            timestamp: tx.timestamp || new Date().toISOString(),
+            amount: parseFloat(tx.amount) || 0,
+            merchant: tx.merchant || "UNKNOWN",
+            upi_id: tx.upi_id || "",
+            status: tx.status || "SUCCESS",
+            reference_number: tx.reference_number || "",
+            source_type: backendResult.source_type || "pdf",
+            raw_line: tx.raw_line || "",
+            created_at: new Date().toISOString()
+          }));
+          saveStatementTransactions(statementRecords);
+        }
+      }
+
       // The Python backend already saved transactions and built a profile.
       // Return its response directly.
       console.log(`[PDF] Python backend extracted ${backendResult.transactions_extracted || 0} transactions`);
