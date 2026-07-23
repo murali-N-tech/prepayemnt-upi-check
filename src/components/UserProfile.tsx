@@ -206,6 +206,9 @@ export default function UserProfile() {
       {/* Header */}
       <div>
         <h1 className="text-3xl font-bold tracking-tight text-white mb-2">My Profile</h1>
+        <div className="bg-slate-800 p-4 border border-indigo-500/30 rounded-lg text-xs text-slate-400 mt-4 mb-4">
+          <strong>Disclaimer:</strong> No bank/NPCI API exposes real-time fraud status of a VPA to third-party apps. There is no public ground-truth "this account is fraudulent" source. This system is a signal-aggregation and behavioral-anomaly engine, not a bank-verified guarantee.
+        </div>
         <p className="text-slate-400">
           Personalized payment behavior dashboard for <span className="font-semibold text-indigo-400">{username}</span>.
           {transactions.length > 0 && (
