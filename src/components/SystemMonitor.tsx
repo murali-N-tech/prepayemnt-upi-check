@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Activity, Database, ShieldAlert, Search } from "lucide-react";
 import { Transaction } from "../types";
 import { useAuth } from "../context/AuthContext";
+import { getApiUrl } from "../services/apiConfig";
 
 export default function SystemMonitor() {
   const { token } = useAuth();
@@ -19,9 +20,9 @@ export default function SystemMonitor() {
     try {
       const headers = { Authorization: `Bearer ${token}` };
       const [txsRes, driftRes, healthRes] = await Promise.all([
-        fetch("/api/transactions", { headers }),
-        fetch("/api/model-drift", { headers }),
-        fetch("/api/health", { headers })
+        fetch(getApiUrl("/api/transactions"), { headers }),
+        fetch(getApiUrl("/api/model-drift"), { headers }),
+        fetch(getApiUrl("/api/health"), { headers })
       ]);
 
       if (!txsRes.ok || !driftRes.ok || !healthRes.ok) {

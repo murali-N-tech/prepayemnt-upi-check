@@ -9,6 +9,7 @@ import {
 } from "recharts";
 import { BehaviorProfile, StatementTransaction } from "../types";
 import { useAuth } from "../context/AuthContext";
+import { getApiUrl } from "../services/apiConfig";
 
 const CHART_COLORS = ["#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd", "#818cf8", "#4f46e5", "#7c3aed", "#5b21b6", "#6d28d9", "#4338ca"];
 
@@ -34,17 +35,17 @@ export default function UserProfile() {
         setError(null);
         const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
 
-        let pRes = await fetch(`/api/profiles/${userId}`, { headers });
+        let pRes = await fetch(getApiUrl(`/api/profiles/${userId}`), { headers });
         if (!pRes.ok && username && username !== userId) {
-          pRes = await fetch(`/api/profiles/${username}`, { headers });
+          pRes = await fetch(getApiUrl(`/api/profiles/${username}`), { headers });
         }
         if (pRes.ok) {
           setProfile(await pRes.json());
         }
 
-        let tRes = await fetch(`/api/statement-transactions/${userId}`, { headers });
+        let tRes = await fetch(getApiUrl(`/api/statement-transactions/${userId}`), { headers });
         if ((!tRes.ok || tRes.headers.get("content-type")?.includes("html")) && username && username !== userId) {
-          tRes = await fetch(`/api/statement-transactions/${username}`, { headers });
+          tRes = await fetch(getApiUrl(`/api/statement-transactions/${username}`), { headers });
         }
         if (tRes.ok && !tRes.headers.get("content-type")?.includes("html")) {
           setTransactions(await tRes.json());

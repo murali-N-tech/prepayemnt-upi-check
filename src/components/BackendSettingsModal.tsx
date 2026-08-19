@@ -112,12 +112,12 @@ export default function BackendSettingsModal({ isOpen, onClose }: BackendSetting
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder={isCapacitorNative() ? "http://10.0.2.2:3001" : "Leave blank for default relative /api"}
+                placeholder="https://edge-upi-backend.onrender.com"
                 className="w-full pl-9 pr-4 py-2 bg-slate-950 border border-slate-800 rounded-lg text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
               />
             </div>
             <p className="text-[11px] text-slate-500">
-              For Android emulator use <code className="text-indigo-400 bg-slate-950 px-1 py-0.5 rounded">http://10.0.2.2:3001</code> or your local computer Wi-Fi IP address.
+              Default remote backend: <code className="text-indigo-400 bg-slate-950 px-1 py-0.5 rounded">https://edge-upi-backend.onrender.com</code>
             </p>
 
             <button

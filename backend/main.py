@@ -527,6 +527,22 @@ def get_my_profile(user: str = Depends(get_current_user)):
     return profile
 
 
+@app.get("/profiles/{user_id}")
+@app.get("/api/profiles/{user_id}")
+def get_user_profile_by_id(user_id: str):
+    profile = get_behavior_profile(user_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Behavior profile not found")
+    return profile
+
+
+@app.get("/statement-transactions/{user_id}")
+@app.get("/api/statement-transactions/{user_id}")
+def get_user_statement_txs(user_id: str):
+    txs = get_user_transactions(user_id)
+    return txs
+
+
 @app.post("/personalized-risk-check")
 def personalized_risk_check(payload: PersonalizedRiskCheck):
 

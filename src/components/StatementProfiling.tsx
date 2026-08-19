@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Upload, AlertCircle, FileText, CheckCircle2, ArrowRight, Loader2, FileUp, Info } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import { getApiUrl } from "../services/apiConfig";
 
 interface StatementProfilingProps {
   onNavigate?: (page: string) => void;
@@ -62,7 +63,7 @@ export default function StatementProfiling({ onNavigate }: StatementProfilingPro
     formData.append("file", file);
 
     try {
-      const res = await fetch("/api/statement/upload", {
+      const res = await fetch(getApiUrl("/api/statement/upload"), {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${token}`

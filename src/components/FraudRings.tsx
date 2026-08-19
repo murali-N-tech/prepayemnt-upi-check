@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { ShieldAlert, Users, Landmark, AlertTriangle, CheckCircle } from "lucide-react";
+import { getApiUrl } from "../services/apiConfig";
 
 interface FraudRing {
   merchant: string;
@@ -15,7 +16,7 @@ export default function FraudRings() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/fraud-rings");
+      const res = await fetch(getApiUrl("/api/fraud-rings"));
       if (!res.ok) {
         throw new Error("Unable to retrieve fraud ring diagnostics");
       }

@@ -848,7 +848,10 @@ app.post(["/statement/upload", "/api/statement/upload"], upload.single("file"), 
       formData.append("retain_source", String(retain_source));
       formData.append("file", content, { filename, contentType: "application/pdf" });
 
-      const http = await import("http");
+      const pythonBackendUrl = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8000";
+      const targetUrl = new URL(`${pythonBackendUrl.replace(/\/$/, "")}/statement/upload`);
+      const isHttps = targetUrl.protocol === "https:";
+      const httpModule = isHttps ? await import("https") : await import("http");
 
       const backendResult: any = await new Promise((resolve, reject) => {
         const headers = formData.getHeaders();
@@ -857,14 +860,14 @@ app.post(["/statement/upload", "/api/statement/upload"], upload.single("file"), 
         } catch (e) {}
 
         const options = {
-          hostname: "127.0.0.1",
-          port: 8000,
-          path: "/statement/upload",
+          hostname: targetUrl.hostname,
+          port: targetUrl.port || (isHttps ? 443 : 80),
+          path: targetUrl.pathname + targetUrl.search,
           method: "POST",
           headers: headers,
         };
 
-        const backendReq = http.request(options, (backendRes: any) => {
+        const backendReq = httpModule.request(options, (backendRes: any) => {
           let body = "";
           backendRes.on("data", (chunk: string) => { body += chunk; });
           backendRes.on("end", () => {
@@ -882,7 +885,7 @@ app.post(["/statement/upload", "/api/statement/upload"], upload.single("file"), 
         });
 
         backendReq.on("error", (err: Error) => {
-          reject(new Error(`Could not reach Python backend at localhost:8000: ${err.message}. Make sure 'python backend/main.py' is running.`));
+          reject(new Error(`Could not reach Python backend at ${pythonBackendUrl}: ${err.message}.`));
         });
 
         backendReq.setTimeout(120000, () => {

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ZAxis, Cell } from "recharts";
 import { AlertTriangle, Info } from "lucide-react";
+import { getApiUrl } from "../services/apiConfig";
 
 interface HeatmapPoint {
   amount: number;
@@ -18,7 +19,7 @@ export default function FraudHeatmap() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch("/api/heatmap");
+        const res = await fetch(getApiUrl("/api/heatmap"));
         if (!res.ok) {
           throw new Error("Unable to fetch risk coordinate logs");
         }

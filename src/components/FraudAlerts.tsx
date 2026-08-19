@@ -4,6 +4,7 @@ import {
   ArrowRight, RefreshCw, Search, FileText, Activity, ShieldCheck, AlertTriangle
 } from "lucide-react";
 import { Transaction } from "../types";
+import { getApiUrl } from "../services/apiConfig";
 
 export default function FraudAlerts() {
   const [alerts, setAlerts] = useState<Transaction[]>([]);
@@ -17,13 +18,13 @@ export default function FraudAlerts() {
     setError(null);
     try {
       // Try /api/fraud-alerts first, fallback to /api/transactions
-      let res = await fetch("/api/fraud-alerts");
+      let res = await fetch(getApiUrl("/api/fraud-alerts"));
       let data: Transaction[] = [];
 
       if (res.ok) {
         data = await res.json();
       } else {
-        res = await fetch("/api/transactions");
+        res = await fetch(getApiUrl("/api/transactions"));
         if (!res.ok) {
           throw new Error("Unable to read security logs from backend server");
         }

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Share2, AlertCircle, RefreshCw } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import { getApiUrl } from "../services/apiConfig";
 
 interface Edge {
   user: string;
@@ -27,8 +28,8 @@ export default function NetworkGraph() {
     try {
       const headers = { Authorization: `Bearer ${token}` };
       const [edgesRes, gnnRes] = await Promise.all([
-        fetch("/api/fraud-graph", { headers }),
-        fetch("/api/gnn-fraud-detection", { headers })
+        fetch(getApiUrl("/api/fraud-graph"), { headers }),
+        fetch(getApiUrl("/api/gnn-fraud-detection"), { headers })
       ]);
 
       if (!edgesRes.ok || !gnnRes.ok) {

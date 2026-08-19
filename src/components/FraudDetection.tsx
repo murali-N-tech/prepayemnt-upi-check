@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { AlertTriangle, ShieldCheck, Cpu, Sliders } from "lucide-react";
+import { getApiUrl } from "../services/apiConfig";
 
 export default function FraudDetection() {
   const [userId, setUserId] = useState("");
@@ -34,7 +35,7 @@ export default function FraudDetection() {
     };
 
     try {
-      const res = await fetch("/api/predict", {
+      const res = await fetch(getApiUrl("/api/predict"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

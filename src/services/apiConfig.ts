@@ -12,10 +12,9 @@ export function getStoredBackendUrl(): string {
   if (saved) return saved.trim();
   
   if (isCapacitorNative()) {
-    // Android emulator default host loopback to dev machine
-    return "http://10.0.2.2:3001";
+    return "https://edge-upi-backend.onrender.com";
   }
-  // Standard web relative
+  // Standard web app: relative path to use Express server / Vite proxy
   return "";
 }
 
@@ -34,11 +33,16 @@ export function setBackendMode(mode: "online" | "offline"): void {
 }
 
 export function getApiUrl(endpointPath: string): string {
-  const cleanPath = endpointPath.startsWith("/") ? endpointPath : `/${endpointPath}`;
+  let cleanPath = endpointPath.startsWith("/") ? endpointPath : `/${endpointPath}`;
   const baseUrl = getStoredBackendUrl();
 
   if (!baseUrl) {
     return cleanPath; // Uses Vite proxy / relative path
+  }
+
+  // If cleanPath starts with /api/ and baseUrl does not end with /api, remove /api prefix for direct backend calls
+  if (cleanPath.startsWith("/api/") && !baseUrl.endsWith("/api")) {
+    cleanPath = cleanPath.substring(4);
   }
 
   // If baseUrl already ends with /api and cleanPath starts with /api
@@ -51,11 +55,11 @@ export function getApiUrl(endpointPath: string): string {
 
 export async function testBackendHealth(customUrl?: string): Promise<{ success: boolean; message: string }> {
   const targetBase = customUrl !== undefined ? customUrl.trim().replace(/\/$/, "") : getStoredBackendUrl();
-  const testPath = targetBase ? `${targetBase}/health` : "/api/health";
+  const testPath = targetBase ? (targetBase.endsWith("/api") ? `${targetBase}/health` : `${targetBase}/health`) : "/api/health";
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
     const res = await fetch(testPath, { signal: controller.signal });
     clearTimeout(timeoutId);
@@ -66,7 +70,7 @@ export async function testBackendHealth(customUrl?: string): Promise<{ success: 
     return { success: false, message: `Server returned status code ${res.status}` };
   } catch (err: any) {
     if (err.name === "AbortError") {
-      return { success: false, message: "Connection timed out after 4 seconds." };
+      return { success: false, message: "Connection timed out after 8 seconds." };
     }
     return { success: false, message: err.message || "Failed to reach server host." };
   }

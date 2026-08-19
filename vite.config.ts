@@ -8,6 +8,13 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 3001,
     allowedHosts: "all",
+    proxy: {
+      "/api": {
+        target: "https://edge-upi-backend.onrender.com",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, "")
+      }
+    },
     watch: {
       ignored: ["**/data/**", "**/transactions.csv"]
     }

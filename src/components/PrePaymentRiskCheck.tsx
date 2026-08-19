@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Search, AlertTriangle, ShieldCheck, HelpCircle, MapPin, Landmark } from "lucide-react";
 import { PersonalizedAssessment } from "../types";
 import { useAuth } from "../context/AuthContext";
+import { getApiUrl } from "../services/apiConfig";
 
 export default function PrePaymentRiskCheck() {
   const { userId, token } = useAuth();
@@ -34,7 +35,7 @@ export default function PrePaymentRiskCheck() {
     };
 
     try {
-      const res = await fetch("/api/personalized-risk-check", {
+      const res = await fetch(getApiUrl("/api/personalized-risk-check"), {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",

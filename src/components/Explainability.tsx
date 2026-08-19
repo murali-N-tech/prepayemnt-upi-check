@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Search, AlertTriangle, ShieldAlert, Cpu } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { getApiUrl } from "../services/apiConfig";
 
 interface ShapFeature {
   name: string;
@@ -25,7 +26,7 @@ export default function Explainability() {
     setFeatures([]);
 
     try {
-      const res = await fetch(`/api/explain/${txId.trim()}`);
+      const res = await fetch(getApiUrl(`/api/explain/${txId.trim()}`));
       if (!res.ok) {
         throw new Error("Explainability index not found for this Transaction ID");
       }
