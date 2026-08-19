@@ -40,7 +40,10 @@ export default function UserProfile() {
           pRes = await fetch(getApiUrl(`/api/profiles/${username}`), { headers });
         }
         if (pRes.ok) {
-          setProfile(await pRes.json());
+          const pData = await pRes.json();
+          if (pData && !pData.error && !pData.detail) {
+            setProfile(pData);
+          }
         }
 
         let tRes = await fetch(getApiUrl(`/api/statement-transactions/${userId}`), { headers });
@@ -48,7 +51,10 @@ export default function UserProfile() {
           tRes = await fetch(getApiUrl(`/api/statement-transactions/${username}`), { headers });
         }
         if (tRes.ok && !tRes.headers.get("content-type")?.includes("html")) {
-          setTransactions(await tRes.json());
+          const tData = await tRes.json();
+          setTransactions(Array.isArray(tData) ? tData : []);
+        } else {
+          setTransactions([]);
         }
       } catch (err: any) {
         setError(err.message || "Failed to load profiles");
@@ -105,7 +111,9 @@ export default function UserProfile() {
 
   // ── Transaction Table Helpers ──
 
-  const filteredTxs = transactions
+  const safeTxs = Array.isArray(transactions) ? transactions : [];
+
+  const filteredTxs = safeTxs
     .filter(tx => {
       if (!txSearch) return true;
       const q = txSearch.toLowerCase();
@@ -160,9 +168,9 @@ export default function UserProfile() {
   };
 
   // ── Derived Stats ──
-  const totalSpent = transactions.filter(tx => tx.status === "SUCCESS").reduce((sum, tx) => sum + (tx.amount || 0), 0);
-  const uniqueMerchants = new Set(transactions.map(tx => tx.merchant)).size;
-  const uniqueUPIs = new Set(transactions.filter(tx => tx.upi_id).map(tx => tx.upi_id)).size;
+  const totalSpent = safeTxs.filter(tx => tx.status === "SUCCESS").reduce((sum, tx) => sum + (tx.amount || 0), 0);
+  const uniqueMerchants = new Set(safeTxs.map(tx => tx.merchant)).size;
+  const uniqueUPIs = new Set(safeTxs.filter(tx => tx.upi_id).map(tx => tx.upi_id)).size;
 
   // ── Loading State ──
 
@@ -184,7 +192,7 @@ export default function UserProfile() {
 
   // ── Empty State ──
 
-  if (!profile && transactions.length === 0) {
+  if (!profile && safeTxs.length === 0) {
     return (
       <div className="space-y-8 animate-fade-in h-full flex flex-col" id="user-profile-container">
         <div>

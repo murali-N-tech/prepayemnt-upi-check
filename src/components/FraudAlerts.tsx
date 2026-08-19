@@ -45,7 +45,8 @@ export default function FraudAlerts() {
   }, []);
 
   // Filtered alerts logic
-  const filteredAlerts = alerts.filter(a => {
+  const safeAlerts = Array.isArray(alerts) ? alerts : [];
+  const filteredAlerts = safeAlerts.filter(a => {
     // Source filter
     if (sourceFilter === "statement") {
       const src = (a.source_type || "").toLowerCase();

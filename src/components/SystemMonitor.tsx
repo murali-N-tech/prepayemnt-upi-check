@@ -49,7 +49,9 @@ export default function SystemMonitor() {
     fetchTelemetry();
   }, []);
 
-  const filteredTxs = txs.filter(t => {
+  const safeTxs = Array.isArray(txs) ? txs : [];
+
+  const filteredTxs = safeTxs.filter(t => {
     // Search filter
     const matchesSearch =
       t.transaction_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
