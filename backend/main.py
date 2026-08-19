@@ -130,6 +130,7 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
 # --------------------------------------------------
 
 @app.post("/auth/register")
+@app.post("/api/auth/register")
 def register(user: UserAuth):
     user_id = f"usr_{uuid.uuid4().hex[:8]}"
     hashed = hash_password(user.password)
@@ -140,6 +141,7 @@ def register(user: UserAuth):
     return {"message": "User created", "token": token, "user_id": user_id, "username": user.username}
 
 @app.post("/auth/login")
+@app.post("/api/auth/login")
 def login(form_data: OAuth2PasswordRequestForm = Depends()):
     db_user = get_user_by_username(form_data.username)
     if not db_user or not verify_password(form_data.password, db_user["password_hash"]):
