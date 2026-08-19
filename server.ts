@@ -164,6 +164,10 @@ interface TransactionRecord {
   timestamp: string;
   risk: number;
   risk_score: number;
+  source_type?: string;
+  upi_id?: string;
+  status?: string;
+  reason?: string;
 }
 
 interface StatementTransaction {
@@ -333,10 +337,99 @@ app.get(["/health", "/api/health"], (req, res) => {
   res.json({ status: "ok" });
 });
 
+// Helper to evaluate and merge statement transactions with CSV transactions
+function getCombinedTransactions(): TransactionRecord[] {
+  const csvTxs = readCsvTransactions().map(t => ({
+    ...t,
+    source_type: t.source_type || "system",
+    status: t.status || (t.risk === 1 ? "BLOCKED" : "SUCCESS"),
+    reason: t.reason || (t.risk === 1 ? "System anomaly rule trigger" : "Normal transaction")
+  }));
+
+  const stmtTxs = readStatementTransactions();
+  const convertedStmtTxs: TransactionRecord[] = stmtTxs.map((st, idx) => {
+    const amt = typeof st.amount === "number" ? st.amount : parseFloat(st.amount as any) || 0;
+    const statusUpper = (st.status || "SUCCESS").toUpperCase();
+    
+    let base_score = 15;
+    const reasons: string[] = [];
+
+    if (statusUpper === "FAILED" || statusUpper === "FAILURE") {
+      base_score += 55;
+      reasons.push("Execution failure / Rejected status");
+    }
+
+    if (amt > 50000) {
+      base_score += 45;
+      reasons.push("High value transfer anomaly (> ₹50,000)");
+    } else if (amt > 15000) {
+      base_score += 25;
+      reasons.push("Elevated transaction amount (> ₹15,000)");
+    }
+
+    try {
+      const date = new Date(st.timestamp);
+      if (!isNaN(date.getTime())) {
+        const hour = date.getHours();
+        if (hour < 6 || hour >= 22) {
+          base_score += 20;
+          reasons.push("Off-hours transfer (10 PM - 6 AM)");
+        }
+      }
+    } catch {}
+
+    const merchantLower = (st.merchant || "").toLowerCase();
+    const upiLower = (st.upi_id || "").toLowerCase();
+    if (merchantLower.includes("unknown") || merchantLower.includes("blackmarket") || upiLower.includes("suspicious")) {
+      base_score += 30;
+      reasons.push("Unverified beneficiary or high-risk VPA");
+    }
+
+    const risk_score = Math.min(99, Math.max(5, base_score));
+    const risk = (risk_score >= 50 || statusUpper === "FAILED") ? 1 : 0;
+    const velocity_score = risk === 1 ? parseFloat((6.5 + (idx % 3)).toFixed(1)) : parseFloat((1.2 + (idx % 2)).toFixed(1));
+    const device_score = risk === 1 ? 0.85 : 0.35;
+    const location_score = risk === 1 ? 0.75 : 0.25;
+
+    return {
+      transaction_id: st.reference_number || `${st.statement_id}_${idx}`,
+      amount: amt,
+      device_score,
+      location_score,
+      velocity_score,
+      sender: st.user_id || "Statement User",
+      receiver: st.merchant || st.upi_id || "Unknown Beneficiary",
+      timestamp: st.timestamp,
+      risk,
+      risk_score,
+      source_type: st.source_type || "statement",
+      upi_id: st.upi_id || "",
+      status: st.status || "SUCCESS",
+      reason: reasons.length > 0 ? reasons.join("; ") : "Extracted statement transaction"
+    };
+  });
+
+  const combined = [...(stmtTxs.length > 0 ? convertedStmtTxs : []), ...csvTxs];
+  
+  // Sort by timestamp descending
+  return combined.sort((a, b) => {
+    const timeA = new Date(a.timestamp).getTime() || 0;
+    const timeB = new Date(b.timestamp).getTime() || 0;
+    return timeB - timeA;
+  });
+}
+
 // GET Transactions List
 app.get(["/transactions", "/api/transactions"], (req, res) => {
-  const txs = readCsvTransactions();
+  const txs = getCombinedTransactions();
   res.json(txs);
+});
+
+// GET Fraud Alerts List
+app.get(["/fraud-alerts", "/api/fraud-alerts"], (req, res) => {
+  const txs = getCombinedTransactions();
+  const alerts = txs.filter(t => t.risk === 1);
+  res.json(alerts);
 });
 
 // POST Analyze / Predict Transaction
@@ -756,14 +849,19 @@ app.post(["/statement/upload", "/api/statement/upload"], upload.single("file"), 
       formData.append("file", content, { filename, contentType: "application/pdf" });
 
       const http = await import("http");
-      
+
       const backendResult: any = await new Promise((resolve, reject) => {
+        const headers = formData.getHeaders();
+        try {
+          headers["Content-Length"] = formData.getLengthSync();
+        } catch (e) {}
+
         const options = {
           hostname: "127.0.0.1",
           port: 8000,
           path: "/statement/upload",
           method: "POST",
-          headers: formData.getHeaders(),
+          headers: headers,
         };
 
         const backendReq = http.request(options, (backendRes: any) => {
@@ -787,9 +885,9 @@ app.post(["/statement/upload", "/api/statement/upload"], upload.single("file"), 
           reject(new Error(`Could not reach Python backend at localhost:8000: ${err.message}. Make sure 'python backend/main.py' is running.`));
         });
 
-        backendReq.setTimeout(30000, () => {
+        backendReq.setTimeout(120000, () => {
            backendReq.destroy();
-           reject(new Error("Python backend request timed out after 30s"));
+           reject(new Error("Python backend request timed out after 120s"));
         });
 
         formData.pipe(backendReq);
@@ -1008,6 +1106,162 @@ function generateBehaviorProfileLogic(userId: string, txs: StatementTransaction[
   };
 }
 
+function computeMedian(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function computeMAD(arr: number[], median: number): number {
+  if (arr.length === 0) return 0;
+  const absDevs = arr.map(x => Math.abs(x - median));
+  return computeMedian(absDevs);
+}
+
+function computeMerchantTrustScore(merchant: string, history: StatementTransaction[], profile: BehaviorProfile): number {
+  const merchantKey = merchant.strip ? merchant.strip() : merchant.trim();
+  let frequency = profile.merchant_frequency[merchantKey] || 0;
+
+  if (frequency === 0 && history.length > 0) {
+    frequency = history.filter(t => t.merchant === merchantKey).length;
+  }
+
+  if (frequency === 0) return 0;
+
+  const merchantTxs = history.filter(t => t.merchant === merchantKey);
+  let successRate = 1.0;
+  if (merchantTxs.length > 0) {
+    const successes = merchantTxs.filter(t => t.status && t.status.toUpperCase() === "SUCCESS").length;
+    successRate = successes / merchantTxs.length;
+  }
+
+  let daysKnown = 0;
+  if (merchantTxs.length > 0) {
+    const validTxs = merchantTxs.filter(t => t.timestamp && !isNaN(new Date(t.timestamp).getTime()));
+    if (validTxs.length > 0) {
+      const timestamps = validTxs.map(t => new Date(t.timestamp).getTime());
+      const firstTxnTime = Math.min(...timestamps);
+      daysKnown = Math.max(0, (Date.now() - firstTxnTime) / (1000 * 60 * 60 * 24));
+    }
+  }
+
+  const freqScore = Math.min(40, frequency * 5);
+  const succScore = Math.min(30, successRate * 30);
+  const ageScore = Math.min(30, daysKnown / 10);
+
+  return Math.min(100, Math.round(freqScore + succScore + ageScore));
+}
+
+function computeBeneficiaryRelationship(merchant: string, history: StatementTransaction[]): any {
+  const merchantKey = merchant.strip ? merchant.strip() : merchant.trim();
+  if (history.length === 0) {
+    return { strength: 0, txn_count: 0, avg_amount: null };
+  }
+
+  const merchantTxs = history.filter(t => t.merchant === merchantKey);
+  const txnCount = merchantTxs.length;
+
+  if (txnCount === 0) {
+    return { strength: 0, txn_count: 0, avg_amount: null };
+  }
+
+  const totalTransferred = merchantTxs.reduce((sum, t) => sum + (t.amount || 0), 0);
+  const avgAmount = totalTransferred / txnCount;
+
+  let daysKnown = 0;
+  const validTxs = merchantTxs.filter(t => t.timestamp && !isNaN(new Date(t.timestamp).getTime()));
+  if (validTxs.length > 0) {
+    const timestamps = validTxs.map(t => new Date(t.timestamp).getTime());
+    const firstTxnTime = Math.min(...timestamps);
+    daysKnown = Math.max(0, (Date.now() - firstTxnTime) / (1000 * 60 * 60 * 24));
+  }
+
+  const consistencyBonus = txnCount >= 3 ? 20 : 0;
+  const strength = Math.min(100, txnCount * 8 + daysKnown * 0.1 + consistencyBonus);
+
+  return { strength: Math.round(strength), txn_count: txnCount, avg_amount: avgAmount };
+}
+
+function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371.0;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function geocode(location: string): [number, number] | null {
+  if (!location) return null;
+  const loc = location.toLowerCase();
+  const cities: { [key: string]: [number, number] } = {
+    "mumbai": [19.0760, 72.8777],
+    "delhi": [28.7041, 77.1025],
+    "bangalore": [12.9716, 77.5946],
+    "hyderabad": [17.3850, 78.4867],
+    "chennai": [13.0827, 80.2707],
+    "kolkata": [22.5726, 88.3639],
+    "pune": [18.5204, 73.8567],
+    "ahmedabad": [23.0225, 72.5714],
+    "jaipur": [26.9124, 75.7873],
+  };
+  for (const city of Object.keys(cities)) {
+    if (loc.includes(city)) return cities[city];
+  }
+  return null;
+}
+
+function computeTravelSpeed(currentLocation: string | null, currentTime: Date, history: StatementTransaction[]): any {
+  if (!currentLocation || history.length === 0) return null;
+
+  const currentCoords = geocode(currentLocation);
+  if (!currentCoords) return null;
+
+  const historyWithLoc = history.filter(t => (t as any).location && typeof (t as any).location === "string" && (t as any).location.trim() !== "");
+  if (historyWithLoc.length === 0) return null;
+
+  const validTxs = historyWithLoc.filter(t => t.timestamp && !isNaN(new Date(t.timestamp).getTime()));
+  if (validTxs.length === 0) return null;
+
+  validTxs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+  const prevTx = validTxs[validTxs.length - 1];
+  const prevLocStr = (prevTx as any).location;
+  const prevCoords = geocode(prevLocStr);
+
+  if (!prevCoords) return null;
+
+  const distanceKm = haversineDistance(prevCoords[0], prevCoords[1], currentCoords[0], currentCoords[1]);
+  const timeDiffHours = Math.max(0.1, (currentTime.getTime() - new Date(prevTx.timestamp).getTime()) / (1000 * 60 * 60));
+  const speedKmh = distanceKm / timeDiffHours;
+
+  return {
+    speed_kmh: Math.round(speedKmh),
+    prev_location: prevLocStr,
+    distance_km: Math.round(distanceKm),
+    time_diff_hours: parseFloat(timeDiffHours.toFixed(1))
+  };
+}
+
+function detectSequenceAnomaly(merchant: string, history: StatementTransaction[]): boolean {
+  if (history.length < 5) return false;
+
+  const merchants = history.map(t => t.merchant);
+  const counts: {[key:string]: number} = {};
+  merchants.forEach(m => counts[m] = (counts[m] || 0) + 1);
+  const sortedMerchants = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+  const topMerchants = new Set(sortedMerchants.slice(0, 10));
+
+  if (topMerchants.has(merchant)) return false;
+
+  const last3 = merchants.slice(-3);
+  const allInTop = last3.every(m => topMerchants.has(m));
+  return allInTop;
+}
+
 function evaluatePersonalizedRiskLogic(
   profile: BehaviorProfile | null,
   history: StatementTransaction[],
@@ -1041,7 +1295,6 @@ function evaluatePersonalizedRiskLogic(
 
   const avg_amount = profile.avg_amount;
   const max_amount = profile.max_amount;
-  const favorite_merchants = new Set(profile.favorite_merchants);
   const known_upi_ids = new Set(profile.known_upi_ids);
   const most_active_hour = profile.most_active_hour;
   const avg_daily_transactions = profile.average_daily_transactions;
@@ -1055,43 +1308,89 @@ function evaluatePersonalizedRiskLogic(
     average_daily_transactions: avg_daily_transactions
   };
 
-  if (avg_amount > 0) {
-    const amount_multiple = parseFloat((amount / avg_amount).toFixed(2));
-    comparison.amount_multiple = amount_multiple;
+  const merchantTrust = computeMerchantTrustScore(merchant, history, profile);
+  comparison.merchant_trust_score = merchantTrust;
+  if (merchantTrust < 20) {
+    score += 20;
+    reasons.push(`Merchant '${merchant}' has very low trust score (${merchantTrust}/100) - no established payment history`);
+  } else if (merchantTrust < 50) {
+    score += 10;
+    reasons.push(`Merchant '${merchant}' trust score is below average (${merchantTrust}/100)`);
+  } else if (merchantTrust >= 80) {
+    score = Math.max(5, score - 5);
+  }
 
-    if (amount_multiple >= 15) {
-      score += 35;
-      reasons.push(`Amount is ${amount_multiple}x higher than the user's average payment`);
-    } else if (amount_multiple >= 8) {
-      score += 24;
-      reasons.push(`Amount is ${amount_multiple}x above the usual pattern`);
-    } else if (amount_multiple >= 3) {
-      score += 12;
-      reasons.push(`Amount is materially above the user's average transaction size`);
+  const beneficiary = computeBeneficiaryRelationship(merchant, history);
+  comparison.beneficiary_relationship_score = beneficiary.strength;
+  comparison.txn_count_with_payee = beneficiary.txn_count;
+  if (beneficiary.avg_amount !== null) {
+    comparison.avg_amount_to_payee = beneficiary.avg_amount;
+  }
+
+  if (beneficiary.strength === 0) {
+    score += 15;
+    reasons.push("First-time beneficiary - no prior payment relationship found (trust: 0/100)");
+  } else if (beneficiary.strength < 30) {
+    score += 8;
+    reasons.push(`Weak relationship with this beneficiary (score ${beneficiary.strength}/100)`);
+  } else if (beneficiary.strength >= 70) {
+    score = Math.max(5, score - 5);
+  }
+
+  if (beneficiary.avg_amount !== null && amount > 3 * beneficiary.avg_amount && beneficiary.txn_count > 0) {
+    score += 10;
+    reasons.push(`Amount Rs.${amount} is >3x higher than typical payments to this beneficiary (Avg: Rs.${Math.round(beneficiary.avg_amount)})`);
+  }
+
+  // Dynamic Multiples using Median and MAD
+  if (history.length > 0) {
+    const validAmounts = history.map(t => t.amount).filter(a => a !== undefined && !isNaN(a));
+    if (validAmounts.length > 0) {
+      const medianAmt = computeMedian(validAmounts);
+      let madAmt = computeMAD(validAmounts, medianAmt);
+      if (madAmt === 0) madAmt = medianAmt * 0.2;
+
+      const lowThresh = medianAmt + 2 * madAmt;
+      const medThresh = medianAmt + 4 * madAmt;
+      const highThresh = medianAmt + 6 * madAmt;
+
+      comparison.median_amount = Math.round(medianAmt);
+      comparison.amount_mad = Math.round(madAmt);
+      comparison.threshold_low = Math.round(lowThresh);
+      comparison.threshold_medium = Math.round(medThresh);
+      comparison.threshold_high = Math.round(highThresh);
+
+      if (amount > highThresh) {
+        score += 35;
+        reasons.push(`Amount Rs.${amount} exceeds statistical high threshold (Rs.${Math.round(highThresh)}) - beyond 6 MAD from median Rs.${Math.round(medianAmt)}`);
+      } else if (amount > medThresh) {
+        score += 24;
+        reasons.push(`Amount Rs.${amount} exceeds medium threshold (Rs.${Math.round(medThresh)}) - beyond 4 MAD from median Rs.${Math.round(medianAmt)}`);
+      } else if (amount > lowThresh) {
+        score += 12;
+        reasons.push(`Amount Rs.${amount} exceeds low anomaly threshold (Rs.${Math.round(lowThresh)})`);
+      }
     }
+  }
+
+  if (avg_amount > 0) {
+    comparison.amount_multiple = parseFloat((amount / avg_amount).toFixed(2));
   }
 
   if (max_amount > 0 && amount > max_amount) {
     score += 15;
-    reasons.push("Amount is higher than any previously seen transaction in the uploaded statements");
-  }
-
-  const merchantKey = merchant.trim();
-  const seenInHistory = history.some(t => t.merchant.toLowerCase() === merchantKey.toLowerCase());
-  if (!favorite_merchants.has(merchantKey) && !seenInHistory) {
-    score += 20;
-    reasons.push("Merchant has not appeared in the user's historical statement profile");
+    reasons.push(`Amount is higher than any previously seen transaction in history (Max: Rs.${max_amount})`);
   }
 
   if (upi_id && !known_upi_ids.has(upi_id)) {
     score += 12;
-    reasons.push("UPI ID is new for this user");
+    reasons.push(`UPI ID '${upi_id}' is new for this user`);
   }
 
   const hour = event_time.getHours();
   if (hour < 6 || hour >= 22) {
     score += 12;
-    reasons.push("Transaction time falls in the user's higher-risk night window");
+    reasons.push(`Transaction time (${hour}:00) falls in the user's higher-risk night window`);
   }
 
   if (most_active_hour !== null) {
@@ -1099,7 +1398,7 @@ function evaluatePersonalizedRiskLogic(
     const wrapDiff = Math.min(diff, 24 - diff);
     if (wrapDiff >= 8) {
       score += 8;
-      reasons.push("Transaction time is far from the user's most active payment hour");
+      reasons.push(`Transaction time (${hour}:00) is far from the user's most active payment hour (${most_active_hour}:00)`);
     }
   }
 
@@ -1117,13 +1416,32 @@ function evaluatePersonalizedRiskLogic(
 
   if (avg_daily_transactions > 0 && daily_velocity > Math.max(avg_daily_transactions * 3, avg_daily_transactions + 6)) {
     score += 18;
-    reasons.push("Transaction velocity is unusually high compared with the user's normal daily activity");
+    reasons.push(`Transaction velocity: ${daily_velocity} projected today vs daily average of ${avg_daily_transactions.toFixed(1)} - velocity anomaly`);
   }
 
   const failed_ratio = profile.failed_transactions / (profile.transaction_count || 1);
   if (failed_ratio > 0.2) {
     score += 5;
-    reasons.push("Historical statement profile already contains a high failed transaction ratio");
+    reasons.push("Historical statement profile contains a high failed transaction ratio");
+  }
+
+  const geoData = computeTravelSpeed(location, event_time, history);
+  if (geoData) {
+    Object.assign(comparison, geoData);
+    if (geoData.speed_kmh > 1000) {
+      score += 25;
+      reasons.push(`Impossible travel speed ${geoData.speed_kmh} km/h detected between ${geoData.prev_location} and ${location} in ${geoData.time_diff_hours}h`);
+    } else if (geoData.speed_kmh > 500) {
+      score += 15;
+      reasons.push(`Suspicious travel speed ${geoData.speed_kmh} km/h from ${geoData.prev_location}`);
+    }
+  }
+
+  const seqAnomaly = detectSequenceAnomaly(merchant, history);
+  comparison.sequence_anomaly = seqAnomaly;
+  if (seqAnomaly) {
+    score += 8;
+    reasons.push("Transaction breaks the user's typical merchant sequence pattern");
   }
 
   const final_score = Math.min(99, Math.round(score));
@@ -1143,11 +1461,6 @@ function evaluatePersonalizedRiskLogic(
     location
   };
 }
-
-// -----------------------------------------------------------------------------
-// VITE DEV SERVER & STATIC ASSETS SETUP
-// -----------------------------------------------------------------------------
-
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

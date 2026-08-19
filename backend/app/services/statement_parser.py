@@ -85,6 +85,7 @@ _CREDIT_HINTS = re.compile(r"\bcredit|deposit|received|cr\b|credited", re.IGNORE
 
 # For the legacy line-based / provider-detection parsers (kept as fallback)
 DATE_PATTERNS = [
+    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M",
     "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y %I:%M %p",
     "%d/%m/%Y %I:%M:%S %p", "%d-%m-%Y %H:%M:%S", "%d-%m-%Y %H:%M",
     "%d-%m-%Y %I:%M %p", "%d-%m-%Y %I:%M:%S %p", "%Y-%m-%d %H:%M:%S",

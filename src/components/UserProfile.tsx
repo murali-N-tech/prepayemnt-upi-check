@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
-  TrendingUp, TrendingDown, DollarSign, Calendar, Activity, User,
+  TrendingUp, TrendingDown, IndianRupee, Calendar, Activity, User,
   Clock, ArrowUpRight, ArrowDownRight, CreditCard, Search, ChevronDown, ChevronUp,
 } from "lucide-react";
 import {
@@ -234,7 +234,7 @@ export default function UserProfile() {
           <div className="bg-gradient-to-br from-violet-600/10 to-slate-900 border border-violet-500/20 rounded-xl p-4">
             <div className="flex justify-between items-start mb-2">
               <span className="text-xs font-semibold text-violet-300/70 uppercase">Avg Ticket</span>
-              <DollarSign className="h-4 w-4 text-violet-400" />
+              <IndianRupee className="h-4 w-4 text-violet-400" />
             </div>
             <div className="text-2xl font-bold text-white">₹{profile.avg_amount?.toLocaleString("en-IN")}</div>
             <div className="text-xs text-slate-500 mt-1">Mean txn size</div>

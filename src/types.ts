@@ -9,6 +9,10 @@ export interface Transaction {
   timestamp: string;
   risk: number;
   risk_score: number;
+  source_type?: string;
+  upi_id?: string;
+  status?: string;
+  reason?: string;
 }
 
 export interface BehaviorProfile {

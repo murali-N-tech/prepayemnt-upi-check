@@ -17,9 +17,9 @@ export const Login: React.FC<{ onSwitchToRegister: () => void }> = ({ onSwitchTo
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
         },
-        body: JSON.stringify({ username, password }),
+        body: new URLSearchParams({ username, password }).toString(),
       });
 
       const data = await response.json();

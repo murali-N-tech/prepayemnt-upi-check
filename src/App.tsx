@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { 
   FileText, ShieldCheck, Cpu, Share2, AlertTriangle, 
-  LineChart, Eye, Bell, Activity, Shield, Menu, X, LogOut, User 
+  LineChart, Eye, Bell, Activity, Shield, Menu, X, LogOut, User, Server 
 } from "lucide-react";
 
 import { useAuth } from "./context/AuthContext";
@@ -18,6 +18,7 @@ import Explainability from "./components/Explainability.tsx";
 import FraudAlerts from "./components/FraudAlerts.tsx";
 import SystemMonitor from "./components/SystemMonitor.tsx";
 import UserProfile from "./components/UserProfile.tsx";
+import BackendSettingsModal from "./components/BackendSettingsModal.tsx";
 
 type PageID = 
   | "Upload Statement"
@@ -36,6 +37,7 @@ export default function App() {
   const [activePage, setActivePage] = useState<PageID>("User Profile");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showRegister, setShowRegister] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   if (!isAuthenticated) {
     if (showRegister) {
@@ -102,13 +104,22 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-4">
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 rounded-lg text-xs font-semibold transition cursor-pointer"
+            title="Configure Capacitor Mobile Backend Server Endpoint"
+          >
+            <Server className="h-4 w-4 text-indigo-400" />
+            <span className="hidden sm:inline">Server Config</span>
+          </button>
+
           <div className="hidden md:flex items-center gap-2 text-sm text-slate-300 mr-2">
             <span className="h-2 w-2 rounded-full bg-green-500"></span>
             {username}
           </div>
           <button
             onClick={logout}
-            className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition"
+            className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition cursor-pointer"
           >
             <LogOut className="h-4 w-4" />
             <span className="hidden sm:inline">Sign Out</span>
@@ -117,13 +128,15 @@ export default function App() {
           {/* Mobile menu triggers */}
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="lg:hidden p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition"
+            className="lg:hidden p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer"
             aria-label="Toggle Navigation Menu"
           >
             {mobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
           </button>
         </div>
       </header>
+
+      <BackendSettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
       <div className="flex-1 flex flex-col lg:flex-row relative">
         

@@ -140,11 +140,11 @@ def register(user: UserAuth):
     return {"message": "User created", "token": token, "user_id": user_id, "username": user.username}
 
 @app.post("/auth/login")
-def login(user: UserAuth):
-    db_user = get_user_by_username(user.username)
-    if not db_user or not verify_password(user.password, db_user["password_hash"]):
+def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    db_user = get_user_by_username(form_data.username)
+    if not db_user or not verify_password(form_data.password, db_user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    
+
     token = create_token(db_user["id"])
     return {"token": token, "user_id": db_user["id"], "username": db_user["username"]}
 

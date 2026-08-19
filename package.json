@@ -5,9 +5,14 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",
-    "start": "vite preview"
+    "start": "vite preview",
+    "cap:build": "vite build && cap sync",
+    "cap:sync": "cap sync",
+    "cap:open:android": "cap open android"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
     "@types/bcrypt": "^6.0.0",
     "bcrypt": "^6.0.0",
     "express": "^4.19.2",
@@ -21,6 +26,7 @@
     "recharts": "^2.12.7"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
     "@tailwindcss/vite": "^4.0.0",
     "@types/express": "^4.17.21",
     "@types/multer": "^1.4.11",
