@@ -16,3 +16,5 @@ openpyxl
 python-multipart
 bcrypt
 pyjwt
+gradio
+# ... keep your other existing dependencies
