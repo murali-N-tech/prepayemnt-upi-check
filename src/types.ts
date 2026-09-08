@@ -14,6 +14,8 @@ export interface Transaction {
 export interface BehaviorProfile {
   user_id: string;
   transaction_count: number;
+  debit_count?: number;
+  credit_count?: number;
   avg_amount: number;
   max_amount: number;
   min_amount: number;
@@ -68,5 +70,6 @@ export interface StatementTransaction {
   reference_number?: string;
   source_type: string;
   raw_line: string;
+  txn_type?: string;
   created_at: string;
 }

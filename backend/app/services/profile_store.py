@@ -31,10 +31,17 @@ def _get_connection() -> sqlite3.Connection:
             reference_number TEXT,
             source_type TEXT,
             raw_line TEXT,
+            txn_type TEXT NOT NULL DEFAULT 'DEBIT',
             created_at TEXT NOT NULL
         )
         """
     )
+    # Older databases predate txn_type; add it rather than losing their rows.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(statement_transactions)")}
+    if "txn_type" not in columns:
+        conn.execute(
+            "ALTER TABLE statement_transactions ADD COLUMN txn_type TEXT NOT NULL DEFAULT 'DEBIT'"
+        )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS behavior_profiles (
@@ -83,8 +90,9 @@ def save_statement_transactions(
                 reference_number,
                 source_type,
                 raw_line,
+                txn_type,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -98,6 +106,7 @@ def save_statement_transactions(
                     tx.get("reference_number"),
                     source_type,
                     tx.get("raw_line"),
+                    str(tx.get("txn_type") or "DEBIT").upper(),
                     created_at,
                 )
                 for tx in transactions
@@ -122,6 +131,7 @@ def get_user_transactions(user_id: str) -> pd.DataFrame:
             reference_number,
             source_type,
             raw_line,
+            txn_type,
             created_at
         FROM statement_transactions
         WHERE user_id = ?

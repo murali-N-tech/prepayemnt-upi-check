@@ -240,12 +240,16 @@ interface StatementTransaction {
   reference_number?: string;
   source_type: string;
   raw_line: string;
+  /** "DEBIT" (money out) or "CREDIT" (money in). */
+  txn_type: string;
   created_at: string;
 }
 
 interface BehaviorProfile {
   user_id: string;
   transaction_count: number;
+  debit_count: number;
+  credit_count: number;
   avg_amount: number;
   max_amount: number;
   min_amount: number;
@@ -360,6 +364,39 @@ function saveBehaviorProfile(userId: string, profile: BehaviorProfile) {
   } catch (err) {
     console.error("Error saving behavior profile:", err);
   }
+}
+
+// A statement column header repeated on every page reads as a transaction if
+// nothing rejects it. One such row became a real user's max_amount.
+const HEADER_WORDS_RE =
+  /date\s*&?\s*time|transaction\s*details?|particulars|narration|withdrawal|deposit|closing\s*balance|opening\s*balance|\bamount\b|\bbalance\b|\bcredit\b|\bdebit\b|sent\s*received|value\s*date|cheque|ref(?:erence)?\s*no/gi;
+
+function looksLikeHeader(text: string): boolean {
+  if (!text) return false;
+  const hits = new Set((text.match(HEADER_WORDS_RE) || []).map(m => m.toLowerCase()));
+  if (hits.size >= 2) return true;
+  return hits.size === 1 && !/@[a-z]{2,}/i.test(text) && text.split(/\s+/).length <= 8;
+}
+
+/** Splits one CSV row, honouring double-quoted fields containing commas. */
+function splitCsvRow(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else { inQuotes = false; }
+      } else cur += ch;
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      out.push(cur.trim()); cur = "";
+    } else cur += ch;
+  }
+  out.push(cur.trim());
+  return out;
 }
 
 // Graph connection storage
@@ -741,23 +778,39 @@ app.post(
   if (ext === ".csv") {
     // Robust CSV parser
     try {
-      const text = content.toString("utf-8");
+      const text = content.toString("utf-8").replace(/^\uFEFF/, "");
       const lines = text.split(/\r?\n/);
       if (lines.length > 1) {
-        const headers = lines[0].split(",").map(h => h.trim().toLowerCase());
+        const headers = splitCsvRow(lines[0]).map(h => h.trim().toLowerCase());
         for (let i = 1; i < lines.length; i++) {
           const line = lines[i].trim();
           if (!line) continue;
-          const values = line.split(",").map(v => v.trim());
+          const values = splitCsvRow(line);
           const tx: any = {};
-          
+
           headers.forEach((header, idx) => {
             tx[header] = values[idx] || "";
           });
 
-          // Normalize fields
-          const amountStr = tx.amount || tx.transaction_amount || tx.debit || tx.credit || tx.withdrawal || tx.deposit || "0";
-          const amountVal = parseFloat(amountStr) || 0;
+          // Debit and credit mean opposite things. Folding a credit into the
+          // spending baseline inflates avg_amount and max_amount, which drive
+          // the highest-weighted rule in the risk engine.
+          const num = (v: any) => {
+            const n = parseFloat(String(v ?? "").replace(/[^0-9.\-]/g, ""));
+            return Number.isFinite(n) ? n : 0;
+          };
+          let amountVal = num(tx.debit || tx.withdrawal);
+          let txnType = "DEBIT";
+          if (!amountVal) {
+            const credit = num(tx.credit || tx.deposit);
+            if (credit) { amountVal = credit; txnType = "CREDIT"; }
+          }
+          if (!amountVal) amountVal = num(tx.amount || tx.transaction_amount);
+
+          const marker = String(tx.type || tx.txn_type || tx.transaction_type || tx.dr_cr || "").trim().toUpperCase();
+          if (marker.startsWith("CR")) txnType = "CREDIT";
+          else if (marker.startsWith("DR") || marker.startsWith("DEBIT")) txnType = "DEBIT";
+
           let dateVal = tx.date || tx.timestamp || tx.datetime || new Date().toISOString().split("T")[0];
           
           // Convert DD/MM/YYYY or MM/DD/YYYY to YYYY-MM-DD
@@ -780,7 +833,9 @@ app.post(
              timeVal += ":00";
           }
           const timestamp = `${dateVal}T${timeVal}`;
-          const merchantVal = tx.merchant || tx.payee || tx.description || "UNKNOWN_MERCHANT";
+          const merchantVal = tx.merchant || tx.payee || tx.description || tx.narration || tx.particulars || "UNKNOWN_MERCHANT";
+
+          if (amountVal <= 0 || looksLikeHeader(merchantVal)) continue;
 
           parsedTxs.push({
             timestamp,
@@ -789,6 +844,7 @@ app.post(
             upi_id: tx.upi_id || tx.upi || tx.vpa || "",
             status: (tx.status || "SUCCESS").toUpperCase(),
             reference_number: tx.reference_number || tx.reference || tx.utr || tx.txn_id || "",
+            txn_type: txnType,
             raw_line: line
           });
         }
@@ -861,6 +917,7 @@ app.post(
             upi_id: tx.upi_id || "",
             status: tx.status || "SUCCESS",
             reference_number: tx.reference_number || "",
+            txn_type: String(tx.txn_type || "DEBIT").toUpperCase(),
             source_type: backendResult.source_type || "pdf",
             raw_line: tx.raw_line || "",
             created_at: new Date().toISOString()
@@ -905,6 +962,7 @@ app.post(
     upi_id: tx.upi_id,
     status: tx.status,
     reference_number: tx.reference_number,
+    txn_type: String(tx.txn_type || "DEBIT").toUpperCase(),
     source_type,
     raw_line: tx.raw_line,
     created_at: new Date().toISOString()
@@ -947,6 +1005,8 @@ function generateBehaviorProfileLogic(userId: string, txs: StatementTransaction[
     return {
       user_id: userId,
       transaction_count: 0,
+      debit_count: 0,
+      credit_count: 0,
       avg_amount: 0,
       max_amount: 0,
       min_amount: 0,
@@ -965,8 +1025,14 @@ function generateBehaviorProfileLogic(userId: string, txs: StatementTransaction[
     };
   }
 
-  const amounts = txs.map(t => t.amount);
-  const avg_amount = parseFloat((amounts.reduce((sum, val) => sum + val, 0) / transaction_count).toFixed(2));
+  // Spending behaviour is money going OUT. Credits are counted, but they must
+  // not move the amount baseline the risk engine compares against.
+  const isDebit = (t: StatementTransaction) => (t.txn_type || "DEBIT").toUpperCase() !== "CREDIT";
+  const debits = txs.filter(isDebit);
+  const spend = debits.length > 0 ? debits : txs;
+
+  const amounts = spend.map(t => t.amount);
+  const avg_amount = parseFloat((amounts.reduce((sum, val) => sum + val, 0) / amounts.length).toFixed(2));
   const max_amount = Math.max(...amounts);
   const min_amount = Math.min(...amounts);
 
@@ -980,13 +1046,13 @@ function generateBehaviorProfileLogic(userId: string, txs: StatementTransaction[
   let failed_transactions = 0;
 
   txs.forEach(t => {
-    if (t.status === "FAILED" || t.status === "FAILURE") {
+    if (["FAILED", "FAILURE", "DECLINED"].includes(t.status)) {
       failed_transactions++;
     }
     if (t.upi_id) {
       upi_ids_set.add(t.upi_id);
     }
-    if (t.merchant) {
+    if (t.merchant && isDebit(t)) {
       merchant_frequency[t.merchant] = (merchant_frequency[t.merchant] || 0) + 1;
     }
 
@@ -1004,9 +1070,11 @@ function generateBehaviorProfileLogic(userId: string, txs: StatementTransaction[
         weekend_transactions++;
       }
 
-      // Monthly aggregates
-      const yearMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-      monthly_totals[yearMonth] = (monthly_totals[yearMonth] || 0) + t.amount;
+      // Monthly aggregates (spending only)
+      if (isDebit(t)) {
+        const yearMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+        monthly_totals[yearMonth] = (monthly_totals[yearMonth] || 0) + t.amount;
+      }
     } catch {}
   });
 
@@ -1039,6 +1107,8 @@ function generateBehaviorProfileLogic(userId: string, txs: StatementTransaction[
   return {
     user_id: userId,
     transaction_count,
+    debit_count: debits.length,
+    credit_count: transaction_count - debits.length,
     avg_amount,
     max_amount,
     min_amount,

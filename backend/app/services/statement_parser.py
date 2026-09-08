@@ -394,6 +394,28 @@ _GPAY_TXN_RE = re.compile(
 )
 _GPAY_TXNID_RE = re.compile(r"UPITransactionID:?\s*(\w+)", re.IGNORECASE)
 
+# Column headers repeated on every page get picked up as transactions, and a
+# header carrying a stray figure becomes the user's max_amount. Any line built
+# mostly out of these words is a header, not a payment.
+_HEADER_WORDS_RE = re.compile(
+    r"date\s*&?\s*time|transaction\s*details?|particulars|narration|"
+    r"withdrawal|deposit|closing\s*balance|opening\s*balance|"
+    r"\bamount\b|\bbalance\b|\bcredit\b|\bdebit\b|sent\s*received|"
+    r"value\s*date|cheque|ref(?:erence)?\s*no",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_header(text: str) -> bool:
+    """True when a line reads as a column header rather than a transaction."""
+    if not text:
+        return False
+    hits = len(set(m.group(0).lower() for m in _HEADER_WORDS_RE.finditer(text)))
+    if hits >= 2:
+        return True
+    # A single header word with no counterparty and no reference is still noise.
+    return hits == 1 and not _VPA_RE.search(text) and len(text.split()) <= 8
+
 _GPAY_JUNK_RE = re.compile(
     r"^Transaction\s*statement$"
     r"|^\d{7,}.*@"
@@ -441,6 +463,10 @@ def _extract_from_gpay_blocks(pdf: "pdfplumber.PDF", source_name: str) -> List[_
         direction = m.group(1).lower()
         name = re.sub(r"\s+", " ", m.group(2)).strip()
         amount = _clean_amount(m.group(3))
+
+        # Guard against a page header being absorbed into this block.
+        if _looks_like_header(name) or not amount or amount <= 0:
+            continue
         ttype = "DEBIT" if direction == "paidto" else "CREDIT"
         debit = amount if ttype == "DEBIT" else None
         credit = amount if ttype == "CREDIT" else None
@@ -470,13 +496,23 @@ def _extract_from_gpay_blocks(pdf: "pdfplumber.PDF", source_name: str) -> List[_
 # 4. CONVERT _Transaction -> dict (match existing API format)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _txn_to_dict(t: _Transaction) -> dict[str, Any]:
-    """Convert internal dataclass to the dict format expected by the rest of the app."""
-    amount = 0.0
+def _txn_to_dict(t: _Transaction) -> dict[str, Any] | None:
+    """Convert internal dataclass to the dict the rest of the app expects.
+
+    Returns None for rows that are not real transactions (page headers,
+    zero-value lines), so callers must filter the result.
+    """
+    # Direction matters: a credit is money in, and folding it into the
+    # spending baseline inflates avg_amount and max_amount.
     if t.debit and t.debit > 0:
-        amount = t.debit
+        amount, txn_type = t.debit, "DEBIT"
     elif t.credit and t.credit > 0:
-        amount = t.credit
+        amount, txn_type = t.credit, "CREDIT"
+    else:
+        return None
+
+    if _looks_like_header(t.description or "") or _looks_like_header(t.raw_line or ""):
+        return None
 
     # Build timestamp: date + optional time
     timestamp = t.date or datetime.utcnow().strftime("%Y-%m-%d")
@@ -491,7 +527,7 @@ def _txn_to_dict(t: _Transaction) -> dict[str, Any]:
         "status": "SUCCESS",
         "reference_number": t.upi_ref,
         "raw_line": t.raw_line,
-        "txn_type": t.txn_type,
+        "txn_type": t.txn_type or txn_type,
     }
 
 
@@ -555,8 +591,8 @@ def _parse_pdf_with_pdfplumber(content: bytes, source_name: str = "statement.pdf
                 seen.add(key)
                 unique.append(t)
 
-        # Convert to output dict format
-        transactions = [_txn_to_dict(t) for t in unique]
+        # Convert to output dict format, dropping headers and zero-value rows
+        transactions = [d for d in (_txn_to_dict(t) for t in unique) if d is not None]
 
         if not transactions:
             warnings.append(
@@ -714,16 +750,47 @@ def _parse_csv_statement(content: bytes) -> list[dict[str, Any]]:
     for row in rows:
         normalized = {str(k).strip().lower(): v for k, v in row.items() if k}
 
+        # Statements commonly split date and time into two columns. The old
+        # code took whichever matched first and dropped the other, so every
+        # transaction landed at 00:00 and the whole day/night profile was a
+        # constant. Collect both, then join them.
         date_value = None
-        for k in normalized.keys():
-            if any(x in k for x in ["date", "time", "timestamp"]):
-                date_value = normalized[k]
-                break
-                
+        time_value = None
+        for k, v in normalized.items():
+            if "time" in k and not any(x in k for x in ("timestamp", "datetime")):
+                if time_value is None:
+                    time_value = v
+            elif any(x in k for x in ("date", "timestamp", "datetime")):
+                if date_value is None:
+                    date_value = v
+        raw_timestamp = _join_values(date_value, time_value)
+
+        # Debit and credit columns mean opposite things; keep the direction.
         amount_value = None
+        txn_type = "DEBIT"
         for k in normalized.keys():
-            if any(x in k for x in ["amount", "debit", "credit", "withdrawal", "deposit"]):
-                amount_value = normalized[k]
+            if any(x in k for x in ("debit", "withdrawal")):
+                if _normalize_amount(normalized[k]) not in (None, 0.0):
+                    amount_value, txn_type = normalized[k], "DEBIT"
+                    break
+        if amount_value is None:
+            for k in normalized.keys():
+                if any(x in k for x in ("credit", "deposit")):
+                    if _normalize_amount(normalized[k]) not in (None, 0.0):
+                        amount_value, txn_type = normalized[k], "CREDIT"
+                        break
+        if amount_value is None:
+            for k in normalized.keys():
+                if "amount" in k:
+                    amount_value = normalized[k]
+                    break
+        for k in normalized.keys():
+            if k in ("type", "txn_type", "transaction_type", "dr_cr", "drcr"):
+                marker = str(normalized[k]).strip().upper()
+                if marker.startswith(("CR", "CREDIT")):
+                    txn_type = "CREDIT"
+                elif marker.startswith(("DR", "DEBIT")):
+                    txn_type = "DEBIT"
                 break
 
         merchant = "UNKNOWN_MERCHANT"
@@ -748,19 +815,26 @@ def _parse_csv_statement(content: bytes) -> list[dict[str, Any]]:
         if not amount_value:
             continue
 
+        merchant_text = str(merchant).strip()
+        if _looks_like_header(merchant_text):
+            continue
+
         records.append(
             {
-                "timestamp": _normalize_timestamp(date_value),
+                "timestamp": _normalize_timestamp(raw_timestamp),
                 "amount": _normalize_amount(amount_value),
-                "merchant": str(merchant).strip(),
+                "merchant": merchant_text,
                 "upi_id": _clean_optional(upi_id),
                 "status": str(status).upper(),
                 "reference_number": _clean_optional(reference),
                 "raw_line": str(row),
+                "txn_type": txn_type,
             }
         )
 
-    return [tx for tx in records if tx["amount"] is not None]
+    return _dedupe_transactions(
+        [tx for tx in records if tx["amount"] is not None and tx["amount"] > 0]
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1296,6 +1370,8 @@ def generate_behavior_profile(transactions: list[dict[str, Any]]) -> dict[str, A
     if not transactions:
         return {
             "transaction_count": 0,
+            "debit_count": 0,
+            "credit_count": 0,
             "avg_amount": 0,
             "max_amount": 0,
             "min_amount": 0,
@@ -1313,10 +1389,20 @@ def generate_behavior_profile(transactions: list[dict[str, Any]]) -> dict[str, A
 
     df = pd.DataFrame(transactions).copy()
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", format="mixed")
     df["merchant"] = df["merchant"].fillna("UNKNOWN_MERCHANT")
     df["status"] = df["status"].fillna("UNKNOWN").str.upper()
     df["upi_id"] = df["upi_id"].fillna("")
+    if "txn_type" not in df.columns:
+        df["txn_type"] = "DEBIT"
+    df["txn_type"] = df["txn_type"].fillna("DEBIT").astype(str).str.upper()
+
+    # Spending behaviour is built from money going OUT. Including credits
+    # inflates avg_amount and max_amount, and those two feed the highest
+    # weighted rules in the risk engine.
+    spend = df[df["txn_type"] == "DEBIT"]
+    if spend.empty:
+        spend = df
 
     valid_ts = df["timestamp"].dropna()
     if valid_ts.empty:
@@ -1346,31 +1432,36 @@ def generate_behavior_profile(transactions: list[dict[str, Any]]) -> dict[str, A
             .astype(int)
             .to_dict()
         )
+        dated_spend = spend.loc[spend["timestamp"].notna()]
         monthly_totals = (
-            df.loc[df["timestamp"].notna()]
-            .groupby(df.loc[df["timestamp"].notna(), "timestamp"].dt.strftime("%Y-%m"))["amount"]
+            dated_spend
+            .groupby(dated_spend["timestamp"].dt.strftime("%Y-%m"))["amount"]
             .sum()
             .round(2)
             .to_dict()
         )
 
     favorite_merchants = (
-        df["merchant"].value_counts().head(5).index.tolist()
+        spend["merchant"].value_counts().head(5).index.tolist()
     )
-    merchant_frequency = df["merchant"].value_counts().head(10).astype(int).to_dict()
+    merchant_frequency = spend["merchant"].value_counts().head(10).astype(int).to_dict()
     known_upi_ids = sorted([upi for upi in df["upi_id"].unique().tolist() if upi])
 
     return {
         "transaction_count": int(len(df)),
-        "avg_amount": float(round(df["amount"].mean(), 2)),
-        "max_amount": float(round(df["amount"].max(), 2)),
-        "min_amount": float(round(df["amount"].min(), 2)),
+        "debit_count": int((df["txn_type"] == "DEBIT").sum()),
+        "credit_count": int((df["txn_type"] == "CREDIT").sum()),
+        "avg_amount": float(round(spend["amount"].mean(), 2)),
+        "max_amount": float(round(spend["amount"].max(), 2)),
+        "min_amount": float(round(spend["amount"].min(), 2)),
         "most_active_hour": most_active_hour,
         "night_transactions": night_transactions,
         "weekend_transactions": weekend_transactions,
         "favorite_merchants": favorite_merchants,
         "average_daily_transactions": average_daily_transactions,
-        "failed_transactions": int((df["status"] == "FAILED").sum()),
+        "failed_transactions": int(
+            df["status"].isin(["FAILED", "FAILURE", "DECLINED"]).sum()
+        ),
         "known_upi_ids": known_upi_ids,
         "merchant_frequency": merchant_frequency,
         "hourly_distribution": {str(k): int(v) for k, v in hourly_distribution.items()},
