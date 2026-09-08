@@ -36,6 +36,8 @@ from backend.app.services.statement_parser import (
 from backend.app.services.personalized_risk_service import (
     evaluate_personalized_risk,
 )
+from backend.app.services.payee_check import check_payee
+from backend.app.services.payee_reputation import record_payment, report_payee
 
 from backend.app.services.behavioral_biometrics import behavior_score
 from backend.app.services.temporal_gnn import temporal_patterns
@@ -107,6 +109,17 @@ class PersonalizedRiskCheck(BaseModel):
 class UserAuth(BaseModel):
     username: str
     password: str
+
+
+class PayeeCheckRequest(BaseModel):
+    """`payload` is a scanned QR, a pasted UPI ID, or a phone number."""
+    payload: str
+    amount: float | None = None
+
+
+class PayeeReportRequest(BaseModel):
+    vpa: str
+    reason: str | None = None
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
@@ -586,6 +599,69 @@ def _assert_no_duplicate_routes() -> None:
 
 
 _assert_no_duplicate_routes()
+
+
+# --------------------------------------------------
+# Pre-payment payee check
+# --------------------------------------------------
+
+@app.post("/payee/check")
+def payee_check(payload: PayeeCheckRequest, user: str = Depends(get_current_user)):
+    """Score a payee BEFORE any money moves.
+
+    Everything else in this API scores the payer against their own history,
+    which cannot see a first-time victim paying a scammer. This looks at the
+    address being paid.
+    """
+    if not payload.payload.strip():
+        raise HTTPException(status_code=400, detail="Nothing to check")
+
+    result = check_payee(payload.payload, payer_id=user, amount=payload.amount)
+
+    # Fold the payer's own baseline in when there is one, so a payment that is
+    # odd FOR THEM still surfaces even if the payee looks fine.
+    profile = get_behavior_profile(user)
+    if profile and payload.amount:
+        history = get_user_transactions(user)
+        personal = evaluate_personalized_risk(
+            profile=profile,
+            history=history,
+            amount=payload.amount,
+            merchant=result["payee"]["display_name"] or result["payee"]["vpa"] or "",
+            timestamp=pd.Timestamp.now().isoformat(),
+            upi_id=result["payee"]["vpa"],
+        )
+        result["payer_behaviour"] = personal
+        # A payee-side BLOCK is never softened by the payer looking normal.
+        if result["decision"] == "APPROVE" and personal["risk_level"] == "HIGH":
+            result["decision"] = "WARN"
+            result["headline"] = "Unusual for you, even though the payee looks fine"
+    else:
+        result["payer_behaviour"] = None
+
+    return result
+
+
+@app.post("/payee/report")
+def payee_report(payload: PayeeReportRequest, user: str = Depends(get_current_user)):
+    """Report a payee. Reports are what turn one person's bad experience into
+    a signal for everyone else."""
+    if not payload.vpa.strip():
+        raise HTTPException(status_code=400, detail="No address given")
+    count = report_payee(payload.vpa, reporter=user, reason=payload.reason or "")
+    return {"vpa": payload.vpa, "reports": count}
+
+
+@app.post("/payee/confirm")
+def payee_confirm(payload: PayeeCheckRequest, user: str = Depends(get_current_user)):
+    """Record that the payer went ahead. This is what grows the reputation
+    graph: without it the store only ever knows what was uploaded."""
+    result = check_payee(payload.payload, payer_id=user, amount=payload.amount)
+    vpa = result["payee"]["key"]
+    if vpa and payload.amount:
+        record_payment(vpa, payer_id=user, amount=payload.amount,
+                       display_name=result["payee"]["display_name"])
+    return {"recorded": bool(vpa and payload.amount), "payee": vpa}
 
 
 if __name__ == "__main__":

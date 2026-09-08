@@ -429,6 +429,72 @@ function splitCsvRow(line: string): string[] {
   return out;
 }
 
+// -----------------------------------------------------------------------------
+// PYTHON BACKEND PROXY
+// -----------------------------------------------------------------------------
+// The payee intelligence (VPA analysis, QR parsing, reputation) lives in the
+// Python service so there is exactly one implementation of it. Express forwards
+// rather than re-implementing, the same way PDF parsing is already forwarded.
+
+const PYTHON_BACKEND = process.env.PYTHON_BACKEND_URL ?? "http://127.0.0.1:8000";
+
+async function forwardJson(
+  path: string,
+  body: unknown,
+  authorization: string | undefined
+): Promise<{ status: number; body: any }> {
+  const payload = JSON.stringify(body ?? {});
+  const target = new URL(path, PYTHON_BACKEND);
+  const http = await import("http");
+
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: target.hostname,
+        port: target.port || 80,
+        path: target.pathname,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+          ...(authorization ? { Authorization: authorization } : {}),
+        },
+      },
+      (res) => {
+        let raw = "";
+        res.on("data", (c) => (raw += c));
+        res.on("end", () => {
+          try {
+            resolve({ status: res.statusCode ?? 500, body: JSON.parse(raw) });
+          } catch {
+            resolve({
+              status: 502,
+              body: { detail: `Backend returned invalid JSON: ${raw.slice(0, 200)}` },
+            });
+          }
+        });
+      }
+    );
+    req.on("error", (err) => reject(err));
+    req.write(payload);
+    req.end();
+  });
+}
+
+/** Forwards a request, turning an unreachable backend into a clear message. */
+async function proxyToPython(req: Request, res: Response, path: string) {
+  try {
+    const { status, body } = await forwardJson(path, req.body, req.headers.authorization);
+    res.status(status).json(body);
+  } catch (err: any) {
+    res.status(503).json({
+      detail:
+        `The payee intelligence service is not running. Start it with ` +
+        `"python backend/main.py" and try again. (${err.message})`,
+    });
+  }
+}
+
 // Graph connection storage
 interface GraphEdge {
   user: string;
@@ -1318,6 +1384,22 @@ function evaluatePersonalizedRiskLogic(
 // -----------------------------------------------------------------------------
 // VITE DEV SERVER & STATIC ASSETS SETUP
 // -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// PRE-PAYMENT PAYEE CHECK (proxied to the Python service)
+// -----------------------------------------------------------------------------
+
+app.post(["/payee/check", "/api/payee/check"], requireAuth, (req, res) =>
+  proxyToPython(req, res, "/payee/check")
+);
+
+app.post(["/payee/report", "/api/payee/report"], requireAuth, (req, res) =>
+  proxyToPython(req, res, "/payee/report")
+);
+
+app.post(["/payee/confirm", "/api/payee/confirm"], requireAuth, (req, res) =>
+  proxyToPython(req, res, "/payee/confirm")
+);
 
 // Unknown /api/* paths must fail as JSON. Without this they fall through to
 // the SPA fallback below, which answers an API call with HTML (or hangs while
