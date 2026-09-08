@@ -492,6 +492,7 @@ async def upload_statement(
         "statement_id": statement_id,
         "source_type": parsed["source_type"],
         "transactions_extracted": len(transactions),
+        "extracted_transactions": transactions,
         "warnings": parsed["warnings"],
         "profile_created": True,
         "profile": get_behavior_profile(user_id),

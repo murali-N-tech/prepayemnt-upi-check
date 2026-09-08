@@ -30,16 +30,20 @@ export default function UserProfile() {
 
     const fetchData = async () => {
       try {
-        const [profileRes, txsRes] = await Promise.all([
-          fetch(`/api/profiles/${userId}`),
-          fetch(`/api/statement-transactions/${userId}`),
-        ]);
-
-        if (profileRes.ok) {
-          setProfile(await profileRes.json());
+        let pRes = await fetch(`/api/profiles/${userId}`);
+        if (!pRes.ok && username && username !== userId) {
+          pRes = await fetch(`/api/profiles/${username}`);
         }
-        if (txsRes.ok) {
-          setTransactions(await txsRes.json());
+        if (pRes.ok) {
+          setProfile(await pRes.json());
+        }
+
+        let tRes = await fetch(`/api/statement-transactions/${userId}`);
+        if ((!tRes.ok || tRes.headers.get("content-type")?.includes("html")) && username && username !== userId) {
+          tRes = await fetch(`/api/statement-transactions/${username}`);
+        }
+        if (tRes.ok && !tRes.headers.get("content-type")?.includes("html")) {
+          setTransactions(await tRes.json());
         }
       } catch {
         // Ignore errors
@@ -49,7 +53,7 @@ export default function UserProfile() {
     };
 
     fetchData();
-  }, [userId, token]);
+  }, [userId, username, token]);
 
   // ── Chart Data Helpers ──
 
