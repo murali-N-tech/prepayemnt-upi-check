@@ -1,45 +1,31 @@
-import express from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import multer from "multer";
+import bcrypt from "bcryptjs";
 import { createServer as createViteServer } from "vite";
-import { createRequire } from "module";
 
-const require = createRequire(import.meta.url);
-const PDFParser = require("pdf2json");
-
-// Helper: extract all text from a PDF buffer using pdf2json
-function extractPdfText(buffer: Buffer): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const parser = new PDFParser(null, true);
-    parser.on("pdfParser_dataReady", (pdfData: any) => {
-      try {
-        const pages = pdfData?.Pages || [];
-        const allText: string[] = [];
-        for (const page of pages) {
-          const texts = page.Texts || [];
-          for (const t of texts) {
-            const runs = t.R || [];
-            for (const r of runs) {
-              allText.push(decodeURIComponent(r.T || ""));
-            }
-          }
-        }
-        resolve(allText.join(" "));
-      } catch (e: any) {
-        reject(e);
-      }
-    });
-    parser.on("pdfParser_dataError", (err: any) => {
-      reject(new Error(err?.parserError || "PDF parsing failed"));
-    });
-    parser.parseBuffer(buffer);
-  });
+// Load .env (Node >= 20.12). Real environment variables still win.
+try {
+  process.loadEnvFile();
+} catch {
+  // No .env file - fall back to the ambient environment.
 }
 
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error(
+    "Missing JWT_SECRET. Copy .env.example to .env and set it:\n" +
+      '  node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"'
+  );
+  process.exit(1);
+}
+const TOKEN_TTL_HOURS = Number(process.env.JWT_TTL_HOURS ?? 24);
+const BCRYPT_ROUNDS = 12;
+
 const app = express();
-const PORT = 3001;
+const PORT = Number(process.env.PORT ?? 3001);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -66,17 +52,19 @@ if (!fs.existsSync(DATA_DIR)) {
 interface StoredUser {
   user_id: string;
   username: string;
-  password: string;
+  password_hash?: string;
+  /** Legacy plaintext field. Upgraded to password_hash on first successful login. */
+  password?: string;
 }
 
-interface TokenMapping {
-  token: string;
+interface AuthUser {
   user_id: string;
   username: string;
 }
 
-// In-memory token store (persisted tokens are regenerated on login)
-const activeTokens: TokenMapping[] = [];
+interface AuthedRequest extends Request {
+  authUser: AuthUser;
+}
 
 function readUsers(): StoredUser[] {
   if (!fs.existsSync(USERS_FILE)) return [];
@@ -91,60 +79,137 @@ function saveUsers(users: StoredUser[]) {
   fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
 }
 
-function generateToken(): string {
-  return "tok_" + crypto.randomBytes(24).toString("hex");
+// --- HS256 JWT, signed with the same JWT_SECRET the Python backend uses. -----
+// Tokens are stateless, so a server restart no longer silently invalidates
+// every session while the browser still believes it is logged in.
+
+function b64url(value: string | Buffer): string {
+  return Buffer.from(value).toString("base64url");
 }
 
-function resolveTokenToUser(authHeader: string | undefined): TokenMapping | null {
+function signToken(user: AuthUser): string {
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const payload = b64url(
+    JSON.stringify({
+      sub: user.user_id,
+      username: user.username,
+      iat: now,
+      exp: now + TOKEN_TTL_HOURS * 3600,
+    })
+  );
+  const signature = crypto
+    .createHmac("sha256", JWT_SECRET as string)
+    .update(`${header}.${payload}`)
+    .digest("base64url");
+  return `${header}.${payload}.${signature}`;
+}
+
+function verifyToken(token: string): AuthUser | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const [header, payload, signature] = parts;
+
+  const expected = crypto
+    .createHmac("sha256", JWT_SECRET as string)
+    .update(`${header}.${payload}`)
+    .digest("base64url");
+
+  const given = Buffer.from(signature);
+  const want = Buffer.from(expected);
+  if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) {
+    return null;
+  }
+
+  try {
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf-8"));
+    if (typeof claims.exp !== "number" || claims.exp * 1000 <= Date.now()) return null;
+    if (typeof claims.sub !== "string" || !claims.sub) return null;
+    return { user_id: claims.sub, username: claims.username ?? claims.sub };
+  } catch {
+    return null;
+  }
+}
+
+function resolveTokenToUser(authHeader: string | undefined): AuthUser | null {
   if (!authHeader) return null;
   const token = authHeader.replace(/^Bearer\s+/i, "").trim();
-  return activeTokens.find(t => t.token === token) || null;
+  if (!token) return null;
+  return verifyToken(token);
+}
+
+/** Rejects the request unless it carries a valid token. Populates req.authUser. */
+function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const user = resolveTokenToUser(req.headers.authorization);
+  if (!user) {
+    return res.status(401).json({ detail: "Unauthorized" });
+  }
+  (req as AuthedRequest).authUser = user;
+  next();
+}
+
+/** The authenticated user for a route mounted behind requireAuth. */
+function currentUser(req: Request): AuthUser {
+  return (req as AuthedRequest).authUser;
 }
 
 // POST /api/auth/register
-app.post(["/auth/register", "/api/auth/register"], (req, res) => {
-  const { username, password } = req.body;
+app.post(["/auth/register", "/api/auth/register"], async (req, res) => {
+  const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+
   if (!username || !password) {
     return res.status(400).json({ detail: "Username and password are required" });
   }
+  if (password.length < 8) {
+    return res.status(400).json({ detail: "Password must be at least 8 characters" });
+  }
 
   const users = readUsers();
-  const existing = users.find(u => u.username.toLowerCase() === username.toLowerCase());
-  if (existing) {
+  if (users.some((u) => u.username.toLowerCase() === username.toLowerCase())) {
     return res.status(409).json({ detail: "Username already exists" });
   }
 
   const user_id = "user_" + crypto.randomBytes(8).toString("hex");
-  const newUser: StoredUser = { user_id, username, password };
-  users.push(newUser);
+  users.push({ user_id, username, password_hash: await bcrypt.hash(password, BCRYPT_ROUNDS) });
   saveUsers(users);
 
-  const token = generateToken();
-  activeTokens.push({ token, user_id, username });
-
-  res.json({ token, user_id, username });
+  const authUser: AuthUser = { user_id, username };
+  res.json({ token: signToken(authUser), ...authUser });
 });
 
 // POST /api/auth/login
-app.post(["/auth/login", "/api/auth/login"], (req, res) => {
-  const { username, password } = req.body;
+app.post(["/auth/login", "/api/auth/login"], async (req, res) => {
+  const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+
   if (!username || !password) {
     return res.status(400).json({ detail: "Username and password are required" });
   }
 
   const users = readUsers();
-  const user = users.find(
-    u => u.username.toLowerCase() === username.toLowerCase() && u.password === password
-  );
+  const user = users.find((u) => u.username.toLowerCase() === username.toLowerCase());
 
-  if (!user) {
+  let ok = false;
+  if (user?.password_hash) {
+    ok = await bcrypt.compare(password, user.password_hash);
+  } else if (user && typeof user.password === "string") {
+    // Legacy plaintext record: verify once, then upgrade it in place.
+    ok = user.password === password;
+    if (ok) {
+      user.password_hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+      delete user.password;
+      saveUsers(users);
+      console.log(`[auth] migrated "${user.username}" from plaintext to bcrypt`);
+    }
+  }
+
+  if (!user || !ok) {
     return res.status(401).json({ detail: "Invalid username or password" });
   }
 
-  const token = generateToken();
-  activeTokens.push({ token, user_id: user.user_id, username: user.username });
-
-  res.json({ token, user_id: user.user_id, username: user.username });
+  const authUser: AuthUser = { user_id: user.user_id, username: user.username };
+  res.json({ token: signToken(authUser), ...authUser });
 });
 
 // -----------------------------------------------------------------------------
