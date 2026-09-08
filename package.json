@@ -3,10 +3,11 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
+    "dev": "tsx watch server.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
-    "start": "vite preview"
+    "start": "vite preview",
+    "dev:once": "tsx server.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

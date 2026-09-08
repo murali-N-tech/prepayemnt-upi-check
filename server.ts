@@ -441,7 +441,8 @@ const PYTHON_BACKEND = process.env.PYTHON_BACKEND_URL ?? "http://127.0.0.1:8000"
 async function forwardJson(
   path: string,
   body: unknown,
-  authorization: string | undefined
+  authorization: string | undefined,
+  method: "POST" | "GET" = "POST"
 ): Promise<{ status: number; body: any }> {
   const payload = JSON.stringify(body ?? {});
   const target = new URL(path, PYTHON_BACKEND);
@@ -453,10 +454,14 @@ async function forwardJson(
         hostname: target.hostname,
         port: target.port || 80,
         path: target.pathname,
-        method: "POST",
+        method,
         headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(payload),
+          ...(method === "POST"
+            ? {
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(payload),
+              }
+            : {}),
           ...(authorization ? { Authorization: authorization } : {}),
         },
       },
@@ -476,7 +481,7 @@ async function forwardJson(
       }
     );
     req.on("error", (err) => reject(err));
-    req.write(payload);
+    if (method === "POST") req.write(payload);
     req.end();
   });
 }
@@ -1404,8 +1409,13 @@ app.post(["/payee/confirm", "/api/payee/confirm"], requireAuth, (req, res) =>
 // Unknown /api/* paths must fail as JSON. Without this they fall through to
 // the SPA fallback below, which answers an API call with HTML (or hangs while
 // the dev server tries to resolve the path as a module).
-app.use(["/api", "/api/*"], (_req, res) => {
-  res.status(404).json({ detail: "Unknown API endpoint" });
+app.use(["/api", "/api/*"], (req, res) => {
+  // Name the route that missed. A bare "Unknown API endpoint" cannot be told
+  // apart from a stale server process that never registered the route at all.
+  res.status(404).json({
+    detail: `Unknown API endpoint: ${req.method} ${req.originalUrl}. If this route ` +
+      `exists in server.ts, the running server is older than the file - restart it.`,
+  });
 });
 
 async function startServer() {
@@ -1423,8 +1433,24 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  app.listen(PORT, "0.0.0.0", async () => {
     console.log(`Server running on http://localhost:${PORT}`);
+
+    // The payee check is proxied, so its usefulness depends on a second
+    // process. Say so at startup rather than at the first failed request.
+    try {
+      const { status } = await forwardJson("/health", null, undefined, "GET");
+      console.log(
+        status === 200
+          ? `Payee intelligence service reachable at ${PYTHON_BACKEND}`
+          : `Payee intelligence service at ${PYTHON_BACKEND} answered ${status}`
+      );
+    } catch {
+      console.warn(
+        `Payee intelligence service NOT reachable at ${PYTHON_BACKEND}.\n` +
+          `  "Check a Payee" and PDF upload will fail until you run:  python backend/main.py`
+      );
+    }
   });
 }
 
