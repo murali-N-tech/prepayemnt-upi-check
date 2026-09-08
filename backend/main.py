@@ -251,23 +251,6 @@ def predict(tx: Transaction):
 
 
 # --------------------------------------------------
-# Transactions
-# --------------------------------------------------
-
-@app.get("/transactions")
-def transactions():
-
-    df = get_all_transactions()
-
-    if df.empty:
-        return []
-
-    df = df.fillna("")
-
-    return df.to_dict(orient="records")
-
-
-# --------------------------------------------------
 # Fraud Heatmap
 # --------------------------------------------------
 
@@ -340,9 +323,9 @@ def explain(tx_id: str):
 # --------------------------------------------------
 
 @app.get("/fraud-graph")
-def fraud_graph():
+def fraud_graph(user: str = Depends(get_current_user)):
 
-    edges = get_graph()
+    edges = get_all_edges()
 
     return {"edges": edges}
 
@@ -402,7 +385,7 @@ def behavior(tx_id: str):
 # --------------------------------------------------
 
 @app.get("/model-drift")
-def model_drift():
+def model_drift(user: str = Depends(get_current_user)):
 
     df = get_all_transactions()
 
@@ -422,9 +405,9 @@ def model_drift():
 # --------------------------------------------------
 
 @app.get("/gnn-fraud-detection")
-def gnn_detection():
+def gnn_detection(user: str = Depends(get_current_user)):
 
-    edges = get_graph()
+    edges = get_all_edges()
 
     suspicious = gnn_risk(edges)
 
@@ -528,31 +511,6 @@ def personalized_risk_check(payload: PersonalizedRiskCheck):
         **result,
     }
 
-@app.get("/fraud-graph")
-def get_fraud_graph(user: str = Depends(get_current_user)):
-    edges = get_all_edges()
-    return {"edges": edges}
-
-@app.get("/gnn-fraud-detection")
-def get_gnn_fraud_detection(user: str = Depends(get_current_user)):
-    edges = get_all_edges()
-    # Simple logic: merchants with > 3 connections are suspicious
-    merchant_counts = {}
-    for edge in edges:
-        m = edge["merchant"]
-        merchant_counts[m] = merchant_counts.get(m, 0) + 1
-        
-    suspicious = [m for m, count in merchant_counts.items() if count > 2]
-    return {"suspicious_nodes": suspicious}
-
-@app.get("/health")
-def get_health(user: str = Depends(get_current_user)):
-    return {"status": "ok"}
-
-@app.get("/model-drift")
-def get_model_drift(user: str = Depends(get_current_user)):
-    return {"drift_status": "Model Stable"}
-
 @app.get("/transactions")
 def get_transactions(user: str = Depends(get_current_user)):
     df = get_user_transactions(user)
@@ -593,6 +551,28 @@ def get_transactions(user: str = Depends(get_current_user)):
             "risk_score": score
         })
     return txs
+
+# --------------------------------------------------
+# Startup guard: a duplicated path silently shadows the
+# later definition (FastAPI serves the first match), which
+# is how the auth-protected routes became dead code.
+# --------------------------------------------------
+
+def _assert_no_duplicate_routes() -> None:
+    seen: set[tuple] = set()
+    for r in app.routes:
+        path = getattr(r, "path", None)
+        methods = tuple(sorted(getattr(r, "methods", None) or ()))
+        if path is None:
+            continue
+        key = (path, methods)
+        if key in seen:
+            raise RuntimeError(f"Duplicate route registered: {methods} {path}")
+        seen.add(key)
+
+
+_assert_no_duplicate_routes()
+
 
 if __name__ == "__main__":
     import uvicorn
