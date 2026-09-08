@@ -123,6 +123,7 @@ UPI_HINT_RE = re.compile(r"(?i)\b(upi|vpa|utr|txn|transaction|debited|credited|p
 @dataclass
 class _Transaction:
     date: Optional[str] = None
+    time_str: Optional[str] = None
     description: str = ""
     debit: Optional[float] = None
     credit: Optional[float] = None
@@ -357,6 +358,7 @@ def _extract_from_app_blocks(pdf: "pdfplumber.PDF", source_name: str) -> List[_T
         txn_id_m = _BLOCK_TXNID_RE.search(block_text)
         utr_m = _BLOCK_UTR_RE.search(block_text)
         vpa_m = _VPA_RE.search(block_text)
+        time_m = _BLOCK_TIME_RE.search(block_text)
 
         desc = block_text
         desc = _BLOCK_DATE_RE.sub("", desc, count=1)
@@ -371,6 +373,7 @@ def _extract_from_app_blocks(pdf: "pdfplumber.PDF", source_name: str) -> List[_T
 
         txns.append(_Transaction(
             date=_parse_date_plumber(date_m.group(1).replace(",", "")),
+            time_str=(time_m.group(0) if time_m else None),
             description=desc,
             debit=debit,
             credit=credit,
@@ -472,12 +475,14 @@ def _extract_from_gpay_blocks(pdf: "pdfplumber.PDF", source_name: str) -> List[_
         credit = amount if ttype == "CREDIT" else None
 
         txn_id_m = _GPAY_TXNID_RE.search(block_text)
+        time_m = _BLOCK_TIME_RE.search(block_text)
 
         # "01Apr,2026" -> "01 Apr 2026"
         date_norm = re.sub(r"^(\d{2})([A-Za-z]{3}),(\d{4})$", r"\1 \2 \3", date_m.group(1))
 
         txns.append(_Transaction(
             date=_parse_date_plumber(date_norm),
+            time_str=(time_m.group(0) if time_m else None),
             description=name,
             debit=debit,
             credit=credit,
@@ -495,6 +500,19 @@ def _extract_from_gpay_blocks(pdf: "pdfplumber.PDF", source_name: str) -> List[_
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. CONVERT _Transaction -> dict (match existing API format)
 # ═══════════════════════════════════════════════════════════════════════════
+
+def _parse_clock(value: Optional[str]) -> Optional[str]:
+    """'03:33PM' / '3:33 pm' / '15:33' -> '15:33:00'. None when unparseable."""
+    if not value:
+        return None
+    text = str(value).strip().upper().replace(" ", "")
+    for fmt in ("%I:%M%p", "%I:%M:%S%p", "%H:%M", "%H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%H:%M:%S")
+        except ValueError:
+            continue
+    return None
+
 
 def _txn_to_dict(t: _Transaction) -> dict[str, Any] | None:
     """Convert internal dataclass to the dict the rest of the app expects.
@@ -514,10 +532,14 @@ def _txn_to_dict(t: _Transaction) -> dict[str, Any] | None:
     if _looks_like_header(t.description or "") or _looks_like_header(t.raw_line or ""):
         return None
 
-    # Build timestamp: date + optional time
-    timestamp = t.date or datetime.utcnow().strftime("%Y-%m-%d")
-    if "T" not in timestamp and len(timestamp) == 10:
-        timestamp += "T12:00:00"
+    # Build the timestamp from the date plus the clock time when the statement
+    # gave one. Defaulting every PDF transaction to noon made most_active_hour
+    # and night_transactions meaningless for PDF-sourced profiles.
+    date_part = t.date or datetime.utcnow().strftime("%Y-%m-%d")
+    timestamp = date_part
+    if len(date_part) == 10 and "T" not in date_part:
+        clock = _parse_clock(t.time_str)
+        timestamp = f"{date_part}T{clock}" if clock else f"{date_part}T12:00:00"
 
     return {
         "timestamp": _normalize_timestamp(timestamp),
@@ -1488,7 +1510,12 @@ def _normalize_timestamp(value: Any) -> str:
             continue
 
     text = text.replace(",", "")
-    parsed = pd.to_datetime(text, errors="coerce", dayfirst=True)
+
+    # An ISO string is unambiguous. Passing dayfirst=True made pandas read
+    # "2026-04-01" as day 04 of month 01, so every PDF transaction came out
+    # with its month and day swapped.
+    iso_like = bool(re.match(r"^\d{4}-\d{2}-\d{2}([T ]|$)", text))
+    parsed = pd.to_datetime(text, errors="coerce", dayfirst=not iso_like)
     if pd.isna(parsed):
         return datetime.utcnow().isoformat()
     return parsed.isoformat()

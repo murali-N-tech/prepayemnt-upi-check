@@ -71,17 +71,14 @@ def main() -> int:
             (SELECT MIN(id) FROM statement_transactions GROUP BY {NATURAL_KEY})"""
     ).fetchone()[0]
 
-    # 2. rows that are not transactions
-    junk_ids: list[int] = []
-    for row in conn.execute(
-        "SELECT id, merchant, amount, raw_line FROM statement_transactions"
-    ):
-        amount = row["amount"] or 0
-        if amount <= 0 or _looks_like_header(row["merchant"] or ""):
-            junk_ids.append(row["id"])
+    # 2. rows that are not transactions (counted here, removed after truncation
+    #    so the scan runs over the smaller table)
+    junk_estimate = conn.execute(
+        "SELECT COUNT(*) FROM statement_transactions WHERE amount IS NULL OR amount <= 0"
+    ).fetchone()[0]
 
     print(f"\n  duplicate rows to remove   {dupes:,}")
-    print(f"  header / zero-amount rows  {len(junk_ids):,}")
+    print(f"  zero-amount rows           {junk_estimate:,} (+ page headers, counted during the pass)")
 
     oversized = [
         (uid, n)
@@ -100,22 +97,11 @@ def main() -> int:
         conn.close()
         return 0
 
-    with conn:
-        conn.execute(
-            f"""DELETE FROM statement_transactions WHERE id NOT IN
-                (SELECT MIN(id) FROM statement_transactions GROUP BY {NATURAL_KEY})"""
-        )
-        if junk_ids:
-            conn.executemany(
-                "DELETE FROM statement_transactions WHERE id = ?",
-                [(i,) for i in junk_ids],
-            )
-        conn.execute(
-            "UPDATE statement_transactions SET txn_type = 'DEBIT' "
-            "WHERE txn_type IS NULL OR TRIM(txn_type) = ''"
-        )
-        if args.truncate_oversized:
-            for uid, _ in oversized:
+    # Truncate first: it removes the bulk of the rows, so the dedupe and the
+    # header scan below run over a far smaller table.
+    if args.truncate_oversized and oversized:
+        for uid, _ in oversized:
+            with conn:
                 conn.execute(
                     """DELETE FROM statement_transactions
                        WHERE user_id = ? AND id NOT IN (
@@ -126,6 +112,32 @@ def main() -> int:
                        )""",
                     (uid, uid, args.max_rows),
                 )
+            print(f"  capped {uid} to {args.max_rows:,} rows")
+
+    with conn:
+        conn.execute(
+            f"""DELETE FROM statement_transactions WHERE id NOT IN
+                (SELECT MIN(id) FROM statement_transactions GROUP BY {NATURAL_KEY})"""
+        )
+    print("  duplicates removed")
+
+    junk_ids = [
+        row["id"]
+        for row in conn.execute("SELECT id, merchant, amount FROM statement_transactions")
+        if (row["amount"] or 0) <= 0 or _looks_like_header(row["merchant"] or "")
+    ]
+    if junk_ids:
+        with conn:
+            conn.executemany(
+                "DELETE FROM statement_transactions WHERE id = ?", [(i,) for i in junk_ids]
+            )
+    print(f"  removed {len(junk_ids):,} header / zero-amount rows")
+
+    with conn:
+        conn.execute(
+            "UPDATE statement_transactions SET txn_type = 'DEBIT' "
+            "WHERE txn_type IS NULL OR TRIM(txn_type) = ''"
+        )
 
     # The unique index could not be created while duplicates existed.
     try:
