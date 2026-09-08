@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Share2, AlertCircle, RefreshCw } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
@@ -14,7 +14,7 @@ interface Node {
 }
 
 export default function NetworkGraph() {
-  const { token } = useAuth();
+  const { api } = useAuth();
   const [edges, setEdges] = useState<Edge[]>([]);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [suspiciousNodes, setSuspiciousNodes] = useState<string[]>([]);
@@ -25,18 +25,10 @@ export default function NetworkGraph() {
     setLoading(true);
     setError(null);
     try {
-      const headers = { Authorization: `Bearer ${token}` };
-      const [edgesRes, gnnRes] = await Promise.all([
-        fetch("/api/fraud-graph", { headers }),
-        fetch("/api/gnn-fraud-detection", { headers })
+      const [edgesData, gnnData] = await Promise.all([
+        api<{ edges?: { user: string; merchant: string }[] }>("/api/fraud-graph"),
+        api<{ suspicious_nodes?: string[] }>("/api/gnn-fraud-detection"),
       ]);
-
-      if (!edgesRes.ok || !gnnRes.ok) {
-        throw new Error("Unable to retrieve graph telemetry");
-      }
-
-      const edgesData = await edgesRes.json();
-      const gnnData = await gnnRes.json();
 
       const fetchedEdges: Edge[] = edgesData.edges || [];
       setEdges(fetchedEdges);

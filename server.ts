@@ -388,29 +388,33 @@ buildGraphCache();
 // -----------------------------------------------------------------------------
 
 // Home & Health
-app.get(["/", "/api"], (req, res) => {
+app.get(["/", "/api"], (_req, res) => {
   res.json({ message: "Edge AI UPI Behaviour Risk System Running (Node.js)" });
 });
 
-app.get(["/health", "/api/health"], (req, res) => {
+app.get(["/health", "/api/health"], (_req, res) => {
   res.json({ status: "ok" });
 });
 
 // GET Transactions List
-app.get(["/transactions", "/api/transactions"], (req, res) => {
-  const txs = readCsvTransactions();
-  res.json(txs);
+app.get(["/transactions", "/api/transactions"], requireAuth, (req, res) => {
+  const { user_id, username } = currentUser(req);
+  const mine = readCsvTransactions().filter(
+    (t) => t.sender === user_id || t.sender === username
+  );
+  res.json(mine);
 });
 
 // POST Analyze / Predict Transaction
-app.post(["/predict", "/api/predict"], (req, res) => {
-  const { amount, device_score, location_score, velocity_score, sender, receiver, timestamp } = req.body;
+app.post(["/predict", "/api/predict"], requireAuth, (req, res) => {
+  const { amount, device_score, location_score, velocity_score, receiver, timestamp } = req.body ?? {};
 
   const currentAmount = parseFloat(amount) || 0;
   const devScore = parseFloat(device_score) || 0.5;
   const locScore = parseFloat(location_score) || 0.5;
   const velScore = parseFloat(velocity_score) || 1.0;
-  const txSender = sender ? String(sender).trim() : "unknown_user";
+  // The payer is whoever holds the token. Never trust a client-supplied id.
+  const txSender = currentUser(req).user_id;
   const txReceiver = receiver ? String(receiver).trim() : "unknown_merchant";
   const txTimestamp = timestamp || new Date().toISOString();
 
@@ -422,28 +426,30 @@ app.post(["/predict", "/api/predict"], (req, res) => {
     is_night = 0;
   }
 
-  // Calculate rolling statistics from tail 5
-  const allTxs = readCsvTransactions();
+  // Rolling statistics over this payer's own recent transactions.
+  // These used to be computed and then thrown away; the two spike rules
+  // below are the same signals the Python model reads (rolling_avg_amount,
+  // rolling_txn_count, time_gap).
+  const myTxs = readCsvTransactions().filter((t) => t.sender === txSender);
   let rolling_avg_amount = currentAmount;
   let rolling_txn_count = 1;
   let time_gap = 100;
 
-  if (allTxs.length > 0) {
-    const last5 = allTxs.slice(-5);
+  if (myTxs.length > 0) {
+    const last5 = myTxs.slice(-5);
     const sum = last5.reduce((acc, t) => acc + t.amount, 0);
     rolling_avg_amount = sum / last5.length;
     rolling_txn_count = last5.length;
 
-    try {
-      const lastTxTime = new Date(allTxs[allTxs.length - 1].timestamp).getTime();
-      const currentTxTime = new Date(txTimestamp).getTime();
+    const lastTxTime = new Date(myTxs[myTxs.length - 1].timestamp).getTime();
+    const currentTxTime = new Date(txTimestamp).getTime();
+    if (Number.isFinite(lastTxTime) && Number.isFinite(currentTxTime)) {
       time_gap = Math.max(1, Math.floor((currentTxTime - lastTxTime) / 1000));
-    } catch {
-      time_gap = 100;
     }
   }
 
-  // Simulated machine-learning decision boundary resembling original Ensemble
+  // Rule-based fallback engine. This is NOT a model: the FastAPI /predict
+  // endpoint is the model path. Keep the two in sync when either changes.
   let base_prob = 0.15;
   if (currentAmount > 10000) base_prob += 0.12;
   if (currentAmount > 70000) base_prob += 0.35;
@@ -451,6 +457,15 @@ app.post(["/predict", "/api/predict"], (req, res) => {
   if (devScore > 0.7) base_prob += 0.08;
   if (locScore > 0.7) base_prob += 0.08;
   if (is_night === 1) base_prob += 0.10;
+
+  // Amount spike against this payer's own recent average.
+  if (rolling_txn_count > 1 && rolling_avg_amount > 0 && currentAmount > rolling_avg_amount * 5) {
+    base_prob += 0.15;
+  }
+  // Rapid-fire: another payment less than 30s after the previous one.
+  if (rolling_txn_count > 1 && time_gap < 30) {
+    base_prob += 0.10;
+  }
 
   let risk_score = Math.floor(Math.min(0.95, Math.max(0.05, base_prob)) * 100);
   let risk = (currentAmount > 70000 || velScore > 7 || risk_score >= 70) ? 1 : 0;
@@ -497,7 +512,7 @@ app.post(["/predict", "/api/predict"], (req, res) => {
 });
 
 // GET Heatmap coords
-app.get(["/heatmap", "/api/heatmap"], (req, res) => {
+app.get(["/heatmap", "/api/heatmap"], requireAuth, (_req, res) => {
   const txs = readCsvTransactions();
   if (txs.length < 2) {
     return res.json({ error: "Not enough transactions" });
@@ -509,7 +524,7 @@ app.get(["/heatmap", "/api/heatmap"], (req, res) => {
 });
 
 // GET SHAP Explainer
-app.get(["/explain/:tx_id", "/api/explain/:tx_id"], (req, res) => {
+app.get(["/explain/:tx_id", "/api/explain/:tx_id"], requireAuth, (req, res) => {
   const { tx_id } = req.params;
   const txs = readCsvTransactions();
   const tx = txs.find(t => t.transaction_id === tx_id);
@@ -539,12 +554,12 @@ app.get(["/explain/:tx_id", "/api/explain/:tx_id"], (req, res) => {
 });
 
 // GET Fraud Graph Edges
-app.get(["/fraud-graph", "/api/fraud-graph"], (req, res) => {
+app.get(["/fraud-graph", "/api/fraud-graph"], requireAuth, (_req, res) => {
   res.json({ edges: graphEdges });
 });
 
 // GET Fraud Rings
-app.get(["/fraud-rings", "/api/fraud-rings"], (req, res) => {
+app.get(["/fraud-rings", "/api/fraud-rings"], requireAuth, (_req, res) => {
   // Group users connected to each merchant
   const merchantToUsers: Record<string, Set<string>> = {};
   graphEdges.forEach(edge => {
@@ -569,7 +584,7 @@ app.get(["/fraud-rings", "/api/fraud-rings"], (req, res) => {
 });
 
 // GET Temporal Patterns (count fraud transactions by hour)
-app.get(["/temporal-patterns", "/api/temporal-patterns"], (req, res) => {
+app.get(["/temporal-patterns", "/api/temporal-patterns"], requireAuth, (_req, res) => {
   const txs = readCsvTransactions();
   const hourMap: Record<string, number> = {};
   for (let i = 0; i < 24; i++) {
@@ -589,7 +604,7 @@ app.get(["/temporal-patterns", "/api/temporal-patterns"], (req, res) => {
 });
 
 // GET Behavioral Biometrics
-app.get(["/behavior/:tx_id", "/api/behavior/:tx_id"], (req, res) => {
+app.get(["/behavior/:tx_id", "/api/behavior/:tx_id"], requireAuth, (req, res) => {
   const { tx_id } = req.params;
   const txs = readCsvTransactions();
   const tx = txs.find(t => t.transaction_id === tx_id);
@@ -610,7 +625,7 @@ app.get(["/behavior/:tx_id", "/api/behavior/:tx_id"], (req, res) => {
 });
 
 // GET Model Drift status
-app.get(["/model-drift", "/api/model-drift"], (req, res) => {
+app.get(["/model-drift", "/api/model-drift"], requireAuth, (_req, res) => {
   const txs = readCsvTransactions();
   if (txs.length < 20) {
     return res.json({ status: "Not enough data" });
@@ -626,7 +641,7 @@ app.get(["/model-drift", "/api/model-drift"], (req, res) => {
 });
 
 // GET GNN Fraud Detection (suspicious nodes with degree >= 3)
-app.get(["/gnn-fraud-detection", "/api/gnn-fraud-detection"], (req, res) => {
+app.get(["/gnn-fraud-detection", "/api/gnn-fraud-detection"], requireAuth, (_req, res) => {
   const degrees: Record<string, number> = {};
   graphEdges.forEach(e => {
     degrees[e.user] = (degrees[e.user] || 0) + 1;
@@ -638,14 +653,9 @@ app.get(["/gnn-fraud-detection", "/api/gnn-fraud-detection"], (req, res) => {
 });
 
 // GET Profile by user_id
-app.get(["/profiles/me", "/api/profiles/me"], (req, res) => {
-  const authUser = resolveTokenToUser(req.headers.authorization);
-  if (!authUser) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
+app.get(["/profiles/me", "/api/profiles/me"], requireAuth, (req, res) => {
   const profiles = readBehaviorProfiles();
-  const profile = profiles[authUser.user_id];
+  const profile = profiles[currentUser(req).user_id];
 
   if (!profile) {
     return res.status(404).json({ error: "Behavior profile not found" });
@@ -653,28 +663,37 @@ app.get(["/profiles/me", "/api/profiles/me"], (req, res) => {
   res.json(profile);
 });
 
-app.get(["/profiles/:user_id", "/api/profiles/:user_id"], (req, res) => {
-  const { user_id } = req.params;
-  const profiles = readBehaviorProfiles();
-  const profile = profiles[user_id];
+// GET Statement Transactions for the signed-in user.
+// Capped so a very large statement cannot blow up the response or the browser.
+const MAX_STATEMENT_ROWS = 2000;
 
-  if (!profile) {
-    return res.status(404).json({ error: "Behavior profile not found" });
+app.get(
+  ["/statement-transactions", "/api/statement-transactions"],
+  requireAuth,
+  (req, res) => {
+    const { user_id } = currentUser(req);
+    const all = readStatementTransactions().filter((t) => t.user_id === user_id);
+
+    const limit = Math.min(
+      Math.max(parseInt(String(req.query.limit ?? MAX_STATEMENT_ROWS), 10) || MAX_STATEMENT_ROWS, 1),
+      MAX_STATEMENT_ROWS
+    );
+    const offset = Math.max(parseInt(String(req.query.offset ?? 0), 10) || 0, 0);
+
+    res.json({
+      total: all.length,
+      limit,
+      offset,
+      truncated: all.length > offset + limit,
+      transactions: all.slice(offset, offset + limit),
+    });
   }
-  res.json(profile);
-});
+);
 
-// GET Statement Transactions for a user (for displaying extracted data on profile page)
-app.get(["/statement-transactions/:user_id", "/api/statement-transactions/:user_id"], (req, res) => {
-  const { user_id } = req.params;
-  const allTxs = readStatementTransactions();
-  const userTxs = allTxs.filter(t => t.user_id === user_id);
-  res.json(userTxs);
-});
-
-// POST Personalized Risk Check
-app.post(["/personalized-risk-check", "/api/personalized-risk-check"], (req, res) => {
-  const { user_id, amount, merchant, timestamp, upi_id, location } = req.body;
+// POST Personalized Risk Check for the signed-in user
+app.post(["/personalized-risk-check", "/api/personalized-risk-check"], requireAuth, (req, res) => {
+  const { amount, merchant, timestamp, upi_id, location } = req.body ?? {};
+  const { user_id } = currentUser(req);
   const profiles = readBehaviorProfiles();
   const profile = profiles[user_id];
   const history = readStatementTransactions().filter(t => t.user_id === user_id);
@@ -696,14 +715,17 @@ app.post(["/personalized-risk-check", "/api/personalized-risk-check"], (req, res
 });
 
 // POST Upload Statement (PDF/CSV)
-app.post(["/statement/upload", "/api/statement/upload"], upload.single("file"), async (req, res) => {
-  const user_id = req.body.user_id;
+app.post(
+  ["/statement/upload", "/api/statement/upload"],
+  requireAuth,
+  upload.single("file"),
+  async (req, res) => {
+  // The statement belongs to whoever uploaded it. Any user_id in the form
+  // body is ignored so one account cannot write into another's history.
+  const { user_id } = currentUser(req);
   const retain_source = req.body.retain_source === "true";
   const file = req.file;
 
-  if (!user_id) {
-    return res.status(400).json({ error: "user_id form field is required" });
-  }
   if (!file) {
     return res.status(400).json({ error: "No statement file uploaded" });
   }
@@ -1171,6 +1193,13 @@ function evaluatePersonalizedRiskLogic(
 // VITE DEV SERVER & STATIC ASSETS SETUP
 // -----------------------------------------------------------------------------
 
+// Unknown /api/* paths must fail as JSON. Without this they fall through to
+// the SPA fallback below, which answers an API call with HTML (or hangs while
+// the dev server tries to resolve the path as a module).
+app.use(["/api", "/api/*"], (_req, res) => {
+  res.status(404).json({ detail: "Unknown API endpoint" });
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -1181,7 +1210,7 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    app.get("*", (_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }

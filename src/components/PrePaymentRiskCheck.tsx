@@ -4,7 +4,7 @@ import { PersonalizedAssessment } from "../types";
 import { useAuth } from "../context/AuthContext";
 
 export default function PrePaymentRiskCheck() {
-  const { userId, token } = useAuth();
+  const { api, username } = useAuth();
   const [merchant, setMerchant] = useState("");
   const [amount, setAmount] = useState("");
   const [upiId, setUpiId] = useState("");
@@ -25,7 +25,6 @@ export default function PrePaymentRiskCheck() {
     setAssessment(null);
 
     const payload = {
-      user_id: userId,
       amount: parseFloat(amount),
       merchant: merchant.trim(),
       timestamp: new Date().toISOString(),
@@ -34,20 +33,10 @@ export default function PrePaymentRiskCheck() {
     };
 
     try {
-      const res = await fetch("/api/personalized-risk-check", {
+      const data = await api<PersonalizedAssessment>("/api/personalized-risk-check", {
         method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
-        },
         body: JSON.stringify(payload),
       });
-
-      if (!res.ok) {
-        throw new Error("Risk check failed. Ensure backend is running.");
-      }
-
-      const data = await res.json();
       setAssessment(data);
     } catch (err: any) {
       setError(err.message || "Something went wrong.");
@@ -164,7 +153,7 @@ export default function PrePaymentRiskCheck() {
                     <h3 className="text-xl font-bold text-white">Assessment: {assessment.risk_level} RISK</h3>
                     <p className="text-slate-300 text-sm mt-1">
                       {assessment.profile_available 
-                        ? `Payment behaviour matched with profile of ${userId}.`
+                        ? `Payment behaviour matched with your profile (${username}).`
                         : "Compiled without baseline. Assessment is a general risk model."}
                     </p>
                   </div>

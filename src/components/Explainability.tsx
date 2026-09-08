@@ -1,6 +1,7 @@
 import React, { useState } from "react";
-import { Search, AlertTriangle, ShieldAlert, Cpu } from "lucide-react";
+import { AlertTriangle, ShieldAlert, Cpu } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { useAuth } from "../context/AuthContext";
 
 interface ShapFeature {
   name: string;
@@ -8,6 +9,7 @@ interface ShapFeature {
 }
 
 export default function Explainability() {
+  const { api } = useAuth();
   const [txId, setTxId] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,16 +27,15 @@ export default function Explainability() {
     setFeatures([]);
 
     try {
-      const res = await fetch(`/api/explain/${txId.trim()}`);
-      if (!res.ok) {
-        throw new Error("Explainability index not found for this Transaction ID");
-      }
-      const data = await res.json();
+      const data = await api<{ features?: string[]; shap_values?: number[][] }>(
+        `/api/explain/${encodeURIComponent(txId.trim())}`
+      );
       
-      if (data.features && data.shap_values && data.shap_values[0]) {
+      const shapRow = data.shap_values?.[0];
+      if (data.features && shapRow) {
         const mapped: ShapFeature[] = data.features.map((feat: string, index: number) => ({
           name: feat,
-          value: parseFloat(data.shap_values[0][index]?.toFixed(4)) || 0,
+          value: parseFloat(shapRow[index]?.toFixed(4) ?? "0") || 0,
         }));
         setFeatures(mapped);
       } else {

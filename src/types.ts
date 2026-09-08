@@ -49,6 +49,14 @@ export interface PersonalizedAssessment {
   location: string | null;
 }
 
+export interface StatementTransactionsPage {
+  total: number;
+  limit: number;
+  offset: number;
+  truncated: boolean;
+  transactions: StatementTransaction[];
+}
+
 export interface StatementTransaction {
   statement_id: string;
   user_id: string;

@@ -1,8 +1,10 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertOctagon, CheckCircle, ShieldAlert, Calendar, DollarSign, ArrowRight } from "lucide-react";
 import { Transaction } from "../types";
+import { useAuth } from "../context/AuthContext";
 
 export default function FraudAlerts() {
+  const { api } = useAuth();
   const [alerts, setAlerts] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -11,12 +13,8 @@ export default function FraudAlerts() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/transactions");
-      if (!res.ok) {
-        throw new Error("Unable to read security logs");
-      }
-      const data: Transaction[] = await res.json();
-      const filtered = data.filter(t => t.risk === 1);
+      const data = await api<Transaction[]>("/api/transactions");
+      const filtered = (data || []).filter(t => t.risk === 1);
       setAlerts(filtered);
     } catch (err: any) {
       setError(err.message || "Something went wrong");

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { 
   FileText, ShieldCheck, Cpu, Share2, AlertTriangle, 
   LineChart, Eye, Bell, Activity, Shield, Menu, X, LogOut, User 
@@ -32,10 +32,18 @@ type PageID =
   | "System Monitor";
 
 export default function App() {
-  const { isAuthenticated, logout, username } = useAuth();
+  const { isAuthenticated, isLoading, logout, username } = useAuth();
   const [activePage, setActivePage] = useState<PageID>("User Profile");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showRegister, setShowRegister] = useState(false);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[#0f172a] flex items-center justify-center">
+        <div className="h-8 w-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     if (showRegister) {

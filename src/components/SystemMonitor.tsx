@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Activity, Database, ShieldAlert, Search } from "lucide-react";
 import { Transaction } from "../types";
 import { useAuth } from "../context/AuthContext";
 
 export default function SystemMonitor() {
-  const { token } = useAuth();
+  const { api } = useAuth();
   const [txs, setTxs] = useState<Transaction[]>([]);
   const [drift, setDrift] = useState<string>("Checking...");
   const [health, setHealth] = useState<string>("Checking...");
@@ -17,20 +17,11 @@ export default function SystemMonitor() {
     setLoading(true);
     setError(null);
     try {
-      const headers = { Authorization: `Bearer ${token}` };
-      const [txsRes, driftRes, healthRes] = await Promise.all([
-        fetch("/api/transactions", { headers }),
-        fetch("/api/model-drift", { headers }),
-        fetch("/api/health", { headers })
+      const [txsData, driftData, healthData] = await Promise.all([
+        api<Transaction[]>("/api/transactions"),
+        api<{ drift_status?: string }>("/api/model-drift"),
+        api<{ status?: string }>("/api/health"),
       ]);
-
-      if (!txsRes.ok || !driftRes.ok || !healthRes.ok) {
-        throw new Error("Unable to read system health telemetry");
-      }
-
-      const txsData = await txsRes.json();
-      const driftData = await driftRes.json();
-      const healthData = await healthRes.json();
 
       setTxs(txsData || []);
       setDrift(driftData.drift_status || "Model Stable");
@@ -46,14 +37,16 @@ export default function SystemMonitor() {
 
   useEffect(() => {
     fetchTelemetry();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api]);
 
   const filteredTxs = txs.filter(t => {
     // Search filter
+    const q = searchQuery.toLowerCase();
     const matchesSearch =
-      t.transaction_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.sender.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (t.receiver && t.receiver.toLowerCase().includes(searchQuery.toLowerCase()));
+      (t.transaction_id ?? "").toLowerCase().includes(q) ||
+      (t.sender ?? "").toLowerCase().includes(q) ||
+      (t.receiver ?? "").toLowerCase().includes(q);
 
     // Risk level filter
     const matchesRisk =

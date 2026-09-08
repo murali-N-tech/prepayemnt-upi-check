@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { ShieldAlert, Users, Landmark, AlertTriangle, CheckCircle } from "lucide-react";
+import { useAuth } from "../context/AuthContext";
 
 interface FraudRing {
   merchant: string;
@@ -7,6 +8,7 @@ interface FraudRing {
 }
 
 export default function FraudRings() {
+  const { api } = useAuth();
   const [rings, setRings] = useState<FraudRing[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -15,11 +17,7 @@ export default function FraudRings() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/fraud-rings");
-      if (!res.ok) {
-        throw new Error("Unable to retrieve fraud ring diagnostics");
-      }
-      const data = await res.json();
+      const data = await api<{ rings?: FraudRing[] }>("/api/fraud-rings");
       setRings(data.rings || []);
     } catch (err: any) {
       setError(err.message || "Failed to load rings data");
