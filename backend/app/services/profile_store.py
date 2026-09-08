@@ -63,6 +63,32 @@ def _get_connection() -> sqlite3.Connection:
         )
         """
     )
+    # H3: every profile read and every statement listing filtered on user_id
+    # with no index, so each one scanned the whole table.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_stmt_user ON statement_transactions(user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_stmt_user_ts ON statement_transactions(user_id, timestamp)"
+    )
+
+    # C4: the natural key for a statement line. With this in place,
+    # INSERT OR IGNORE makes re-uploading the same statement a no-op.
+    # Skipped when the table still holds duplicates from before the fix -
+    # scripts/rebuild_profiles.py cleans those up, and the index is created
+    # on the next connection.
+    try:
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_stmt_tx
+            ON statement_transactions(
+                user_id, timestamp, amount, merchant, reference_number
+            )
+            """
+        )
+    except sqlite3.IntegrityError:
+        pass
+
     conn.commit()
     return conn
 
@@ -75,11 +101,12 @@ def save_statement_transactions(
 ) -> int:
     created_at = datetime.utcnow().isoformat()
     conn = _get_connection()
+    before = conn.execute("SELECT COUNT(*) FROM statement_transactions").fetchone()[0]
 
     with conn:
         conn.executemany(
             """
-            INSERT INTO statement_transactions (
+            INSERT OR IGNORE INTO statement_transactions (
                 statement_id,
                 user_id,
                 timestamp,
@@ -113,8 +140,10 @@ def save_statement_transactions(
             ],
         )
 
+    after = conn.execute("SELECT COUNT(*) FROM statement_transactions").fetchone()[0]
     conn.close()
-    return len(transactions)
+    # Rows already present are skipped, so report what was actually stored.
+    return after - before
 
 
 def get_user_transactions(user_id: str) -> pd.DataFrame:

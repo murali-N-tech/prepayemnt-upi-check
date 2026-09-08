@@ -418,6 +418,11 @@ def gnn_detection(user: str = Depends(get_current_user)):
 # Statement Profiling
 # --------------------------------------------------
 
+# One upload previously inserted 250,000 rows and grew the database to
+# 147 MB. Cap both the file and the row count.
+MAX_STATEMENT_BYTES = 10 * 1024 * 1024
+MAX_STATEMENT_ROWS = 20_000
+
 @app.post("/statement/upload")
 async def upload_statement(
     user_id: str = Form(...),
@@ -428,6 +433,11 @@ async def upload_statement(
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
+    if len(content) > MAX_STATEMENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Statement exceeds the {MAX_STATEMENT_BYTES // (1024 * 1024)} MB limit",
+        )
 
     try:
         parsed = parse_statement_file(file.filename or "statement.pdf", content)
@@ -436,7 +446,11 @@ async def upload_statement(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Statement parsing failed: {exc}") from exc
 
-    transactions = parsed["transactions"]
+    transactions = parsed["transactions"][:MAX_STATEMENT_ROWS]
+    if len(parsed["transactions"]) > MAX_STATEMENT_ROWS:
+        parsed["warnings"].append(
+            f"Statement truncated to the first {MAX_STATEMENT_ROWS} transactions."
+        )
     if not transactions:
         return {
             "user_id": user_id,

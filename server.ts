@@ -30,8 +30,14 @@ const PORT = Number(process.env.PORT ?? 3001);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Configure Multer for uploaded files
-const upload = multer({ storage: multer.memoryStorage() });
+// Configure Multer for uploaded files.
+// One upload previously inserted 250,000 rows and grew the database to 147 MB.
+const MAX_STATEMENT_BYTES = 10 * 1024 * 1024;
+const MAX_STATEMENT_UPLOAD_ROWS = 20_000;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_STATEMENT_BYTES, files: 1 },
+});
 
 // File Paths for local databases
 const DB_FILE = path.join(process.cwd(), "transactions.csv");
@@ -334,13 +340,36 @@ function readStatementTransactions(): StatementTransaction[] {
   }
 }
 
-function saveStatementTransactions(txs: StatementTransaction[]) {
+/** Natural key for a statement line, used to skip re-uploaded rows. */
+function statementKey(t: StatementTransaction): string {
+  return [t.user_id, t.timestamp, t.amount, t.merchant, t.reference_number ?? ""].join("|");
+}
+
+function saveStatementTransactions(txs: StatementTransaction[]): number {
   try {
     const existing = readStatementTransactions();
-    const combined = [...existing, ...txs];
-    fs.writeFileSync(STATEMENT_TXS_FILE, JSON.stringify(combined, null, 2), "utf-8");
+    const seen = new Set(existing.map(statementKey));
+
+    // C4: re-uploading the same statement used to double the user's history,
+    // which halved the risk engine's sensitivity.
+    const fresh = txs.filter((t) => {
+      const key = statementKey(t);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    if (fresh.length > 0) {
+      fs.writeFileSync(
+        STATEMENT_TXS_FILE,
+        JSON.stringify([...existing, ...fresh], null, 2),
+        "utf-8"
+      );
+    }
+    return fresh.length;
   } catch (err) {
     console.error("Error saving statement transactions:", err);
+    return 0;
   }
 }
 
@@ -939,6 +968,13 @@ app.post(
     return res.status(400).json({ error: "Unsupported file type. Upload a PDF or CSV statement." });
   }
 
+  if (parsedTxs.length > MAX_STATEMENT_UPLOAD_ROWS) {
+    warnings.push(
+      `Statement truncated to the first ${MAX_STATEMENT_UPLOAD_ROWS} transactions.`
+    );
+    parsedTxs = parsedTxs.slice(0, MAX_STATEMENT_UPLOAD_ROWS);
+  }
+
   if (parsedTxs.length === 0) {
     return res.json({
       user_id,
@@ -950,7 +986,7 @@ app.post(
     });
   }
 
-  const statement_id = `stmt_${Math.random().toString(36).substr(2, 8)}`;
+  const statement_id = `stmt_${crypto.randomBytes(4).toString("hex")}`;
   
   // Save statement transactions
   const statementRecords: StatementTransaction[] = parsedTxs.map(tx => ({
@@ -968,7 +1004,12 @@ app.post(
     created_at: new Date().toISOString()
   }));
 
-  saveStatementTransactions(statementRecords);
+  const insertedCount = saveStatementTransactions(statementRecords);
+  if (insertedCount < statementRecords.length) {
+    warnings.push(
+      `${statementRecords.length - insertedCount} transactions were already in your history and were skipped.`
+    );
+  }
 
   // Generate Profile
   const userTxs = readStatementTransactions().filter(t => t.user_id === user_id);
@@ -988,7 +1029,8 @@ app.post(
     user_id,
     statement_id,
     source_type,
-    transactions_extracted: parsedTxs.length,
+    transactions_extracted: insertedCount,
+    duplicates_skipped: parsedTxs.length - insertedCount,
     warnings,
     profile_created: true,
     profile
