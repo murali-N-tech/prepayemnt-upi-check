@@ -1400,6 +1400,7 @@ def generate_behavior_profile(transactions: list[dict[str, Any]]) -> dict[str, A
             "most_active_hour": None,
             "night_transactions": 0,
             "weekend_transactions": 0,
+            "transactions_without_time": 0,
             "favorite_merchants": [],
             "average_daily_transactions": 0,
             "failed_transactions": 0,
@@ -1426,8 +1427,18 @@ def generate_behavior_profile(transactions: list[dict[str, Any]]) -> dict[str, A
     if spend.empty:
         spend = df
 
-    valid_ts = df["timestamp"].dropna()
-    if valid_ts.empty:
+    dated = df.loc[df["timestamp"].notna()]
+
+    # A statement that supplies only a date parses to exactly midnight.
+    # Counting those as 00:00 payments marked every one of them a night
+    # transaction and pinned most_active_hour to 0, so hour-based statistics
+    # use only the rows that carry a real clock time.
+    ts = dated["timestamp"]
+    midnight = (ts.dt.hour == 0) & (ts.dt.minute == 0) & (ts.dt.second == 0)
+    timed = dated.loc[~midnight]
+    undated_time = int(midnight.sum())
+
+    if dated.empty:
         most_active_hour = None
         night_transactions = 0
         weekend_transactions = 0
@@ -1435,24 +1446,18 @@ def generate_behavior_profile(transactions: list[dict[str, Any]]) -> dict[str, A
         hourly_distribution: dict[str, int] = {}
         monthly_totals: dict[str, float] = {}
     else:
-        hours = df.loc[df["timestamp"].notna(), "timestamp"].dt.hour
+        hours = timed["timestamp"].dt.hour
         most_active_hour = int(hours.mode().iloc[0]) if not hours.empty else None
         night_transactions = int(((hours < 6) | (hours >= 22)).sum())
-        weekend_transactions = int(
-            (df.loc[df["timestamp"].notna(), "timestamp"].dt.weekday >= 5).sum()
+        # The date is known even when the time is not, so day-level statistics
+        # still use every dated row.
+        weekend_transactions = int((dated["timestamp"].dt.weekday >= 5).sum())
+        daily_counts = dated.groupby(dated["timestamp"].dt.date).size()
+        average_daily_transactions = (
+            float(round(daily_counts.mean(), 2)) if not daily_counts.empty else float(len(df))
         )
-        daily_counts = (
-            df.loc[df["timestamp"].notna()]
-            .groupby(df.loc[df["timestamp"].notna(), "timestamp"].dt.date)
-            .size()
-        )
-        average_daily_transactions = float(round(daily_counts.mean(), 2)) if not daily_counts.empty else float(len(df))
         hourly_distribution = (
-            df.loc[df["timestamp"].notna()]
-            .groupby(df.loc[df["timestamp"].notna(), "timestamp"].dt.hour)
-            .size()
-            .astype(int)
-            .to_dict()
+            timed.groupby(timed["timestamp"].dt.hour).size().astype(int).to_dict()
         )
         dated_spend = spend.loc[spend["timestamp"].notna()]
         monthly_totals = (
@@ -1479,6 +1484,10 @@ def generate_behavior_profile(transactions: list[dict[str, Any]]) -> dict[str, A
         "most_active_hour": most_active_hour,
         "night_transactions": night_transactions,
         "weekend_transactions": weekend_transactions,
+        # How many rows carry a date but no usable time. When this is high the
+        # hour-based rules have little to work with, and the user should be
+        # told rather than shown a confident but meaningless "most active hour".
+        "transactions_without_time": undated_time,
         "favorite_merchants": favorite_merchants,
         "average_daily_transactions": average_daily_transactions,
         "failed_transactions": int(

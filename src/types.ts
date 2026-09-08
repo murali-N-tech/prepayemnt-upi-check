@@ -22,6 +22,7 @@ export interface BehaviorProfile {
   most_active_hour: number | null;
   night_transactions: number;
   weekend_transactions: number;
+  transactions_without_time?: number;
   favorite_merchants: string[];
   average_daily_transactions: number;
   failed_transactions: number;

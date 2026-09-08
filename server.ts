@@ -262,6 +262,7 @@ interface BehaviorProfile {
   most_active_hour: number | null;
   night_transactions: number;
   weekend_transactions: number;
+  transactions_without_time: number;
   favorite_merchants: string[];
   average_daily_transactions: number;
   failed_transactions: number;
@@ -1055,6 +1056,7 @@ function generateBehaviorProfileLogic(userId: string, txs: StatementTransaction[
       most_active_hour: null,
       night_transactions: 0,
       weekend_transactions: 0,
+      transactions_without_time: 0,
       favorite_merchants: [],
       average_daily_transactions: 0,
       failed_transactions: 0,
@@ -1080,6 +1082,7 @@ function generateBehaviorProfileLogic(userId: string, txs: StatementTransaction[
 
   // Hourly profile & distributions
   const hourly_distribution: Record<string, number> = {};
+  let transactions_without_time = 0;
   let night_transactions = 0;
   let weekend_transactions = 0;
   const merchant_frequency: Record<string, number> = {};
@@ -1100,13 +1103,23 @@ function generateBehaviorProfileLogic(userId: string, txs: StatementTransaction[
 
     try {
       const date = new Date(t.timestamp);
+      if (isNaN(date.getTime())) return;
+
+      // A statement giving only a date parses to exactly midnight. Counting
+      // those as 00:00 payments marked all of them night transactions and
+      // pinned most_active_hour to 0, so hour statistics skip them.
       const hour = date.getHours();
-      hourly_distribution[hour.toString()] = (hourly_distribution[hour.toString()] || 0) + 1;
-      
-      if (hour < 6 || hour >= 22) {
-        night_transactions++;
+      const timeKnown = !(hour === 0 && date.getMinutes() === 0 && date.getSeconds() === 0);
+
+      if (timeKnown) {
+        hourly_distribution[hour.toString()] = (hourly_distribution[hour.toString()] || 0) + 1;
+        if (hour < 6 || hour >= 22) {
+          night_transactions++;
+        }
+      } else {
+        transactions_without_time++;
       }
-      
+
       const day = date.getDay();
       if (day === 0 || day === 6) {
         weekend_transactions++;
@@ -1157,6 +1170,7 @@ function generateBehaviorProfileLogic(userId: string, txs: StatementTransaction[
     most_active_hour,
     night_transactions,
     weekend_transactions,
+    transactions_without_time,
     favorite_merchants,
     average_daily_transactions,
     failed_transactions,
