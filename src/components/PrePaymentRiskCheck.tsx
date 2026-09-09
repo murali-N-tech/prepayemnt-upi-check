@@ -101,7 +101,7 @@ export default function PrePaymentRiskCheck() {
                 type="text"
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
-                placeholder="e.g. Mumbai, Maharashtra"
+                placeholder="e.g. Mumbai, Maharashtra (recorded, not scored)"
                 className="w-full px-4 py-2 bg-slate-950 border border-slate-800 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
@@ -238,7 +238,7 @@ export default function PrePaymentRiskCheck() {
                   </div>
                 </div>
                 <div className="text-xs text-slate-500 font-mono">
-                  Verified via Edge Geolocation API
+                  Recorded only &mdash; not used in scoring yet
                 </div>
               </div>
             </div>
