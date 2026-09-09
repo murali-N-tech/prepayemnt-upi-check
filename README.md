@@ -149,8 +149,31 @@ If the model is missing or unloadable the API still starts — everything except
 `/predict` and `/explain` keeps working, and those return 503 with the command
 to run.
 
-Open <http://localhost:3001>, create an account, and the **Check a Payee**
-page is the landing page.
+Open <http://localhost:3001> and create an account. **Your UPI ID is your
+login** — `yourname@okaxis`, not a made-up username. That is deliberate: the
+payer side of every check needs to know which address the payment leaves
+from, and asking for it at sign-up is the only point where the user can say
+so without guessing.
+
+Sign-up checks two things locally and for free: the address is well formed,
+and the handle after the `@` belongs to a real PSP (so `@okaxls` is refused).
+Whether the account behind it actually exists can only be answered by the
+payment network, which needs PSP credentials this project does not ship
+with — so that is a seam, not a stub. Set `UPI_VERIFY_URL` (and optionally
+`UPI_VERIFY_KEY`, `UPI_VERIFY_REQUIRED=true`) in `.env` and registration
+verifies against your provider; leave it unset and the UI says the address
+was format-checked but not verified. Nothing anywhere reports a UPI ID as
+verified unless a provider actually said so.
+
+Existing accounts created before this change are renamed with:
+
+```bash
+python scripts/migrate_users_to_upi.py --list                  # show them
+python scripts/migrate_users_to_upi.py --map murali=murali@okaxis
+python scripts/migrate_users_to_upi.py --auto-phone            # 98…@upi
+```
+
+The **Check a Payee** page is the landing page.
 
 To seed the reputation store from statements already uploaded, and to add
 four clearly named `demo-*` addresses that exhibit the patterns the detector
@@ -165,7 +188,7 @@ python scripts/bootstrap_payee_reputation.py --with-demo-payees
 ```bash
 npm run typecheck     # tsc --noEmit
 npm run build         # typecheck, then build
-pytest tests -q       # 66 tests
+pytest tests -q       # 137 tests
 ```
 
 ---
@@ -277,13 +300,18 @@ plus `is_fraud` and pass it to `train()`.
 
 - The classifier is trained on simulated data (above), so its figures
   demonstrate the method rather than field performance.
-- Express and FastAPI keep separate user stores, so a profile built from a
-  CSV upload (Express, JSON) is not visible to the payee check's payer-side
-  comparison (FastAPI, SQLite).
+- Account existence is not verified against the payment network unless you
+  configure a PSP endpoint (above), so a well-formed UPI ID for an account
+  that was never opened will register.
 - The reputation store is seeded from uploaded statements, so it reflects
   this deployment's users only.
 - Phone-number payees resolve to whoever holds the number today; the check
   says so rather than pretending otherwise.
+- Statements that give a date but no clock time are recorded as
+  time-unknown, so those rows are excluded from active-hour and night-payment
+  statistics rather than being counted at whatever placeholder the parser
+  would otherwise invent. A profile built entirely from such a statement
+  reports no active hour at all, which is the honest answer.
 - `dashboard/` and the legacy pypdf extractors are earlier work kept for
   reference; four tests covering the latter are marked `xfail`.
 

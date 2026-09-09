@@ -94,10 +94,22 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             id TEXT PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
+            upi_id TEXT,
+            upi_verified INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         )
         """
     )
+    # Older databases have a users table without the UPI columns. This has to
+    # run after the CREATE above, or a brand new database fails on a table
+    # that does not exist yet.
+    user_columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+    if "upi_id" not in user_columns:
+        conn.execute("ALTER TABLE users ADD COLUMN upi_id TEXT")
+    if "upi_verified" not in user_columns:
+        # 0 means nobody confirmed the address exists. It is never set to 1
+        # unless a verification provider actually said so.
+        conn.execute("ALTER TABLE users ADD COLUMN upi_verified INTEGER NOT NULL DEFAULT 0")
     # H3: every profile read and every statement listing filtered on user_id
     # with no index, so each one scanned the whole table.
     conn.execute(
@@ -286,17 +298,23 @@ def get_all_edges() -> list[dict[str, str]]:
     except Exception:
         return []
 
-def create_user(user_id: str, username: str, password_hash: str) -> bool:
+def create_user(
+    user_id: str,
+    username: str,
+    password_hash: str,
+    upi_id: str | None = None,
+    upi_verified: bool = False,
+) -> bool:
     conn = _get_connection()
     created_at = datetime.utcnow().isoformat()
     try:
         with conn:
             conn.execute(
                 """
-                INSERT INTO users (id, username, password_hash, created_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO users (id, username, password_hash, upi_id, upi_verified, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, username, password_hash, created_at),
+                (user_id, username, password_hash, upi_id, 1 if upi_verified else 0, created_at),
             )
         return True
     except sqlite3.IntegrityError:
@@ -307,7 +325,8 @@ def create_user(user_id: str, username: str, password_hash: str) -> bool:
 def get_user_by_username(username: str) -> dict[str, Any] | None:
     conn = _get_connection()
     row = conn.execute(
-        "SELECT id, username, password_hash, created_at FROM users WHERE username = ?",
+        "SELECT id, username, password_hash, upi_id, upi_verified, created_at "
+        "FROM users WHERE username = ? COLLATE NOCASE",
         (username,)
     ).fetchone()
     conn.close()

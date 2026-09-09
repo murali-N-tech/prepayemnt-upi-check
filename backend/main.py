@@ -38,6 +38,11 @@ from backend.app.services.personalized_risk_service import (
 )
 from backend.app.services.fraud_graph import detect_rings, graph_summary, load_edges
 from backend.app.services.payee_check import check_payee
+from backend.app.services.upi_verify import (
+    is_configured as upi_verifier_configured,
+    verification_required as upi_verification_required,
+    verify_vpa,
+)
 from backend.app.services.payee_reputation import record_payment, report_payee
 
 from backend.app.services.behavioral_biometrics import (
@@ -185,28 +190,62 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
 
 @app.post("/auth/register")
 def register(user: UserAuth):
-    username = (user.username or "").strip()
-    if not username or not user.password:
-        raise HTTPException(status_code=400, detail="Username and password are required")
+    """Accounts are identified by the UPI ID they pay from.
+
+    Using the payer's own address as the identity is what lets the rest of the
+    system line their statement up with the payee graph, instead of guessing
+    from a username that means nothing outside this app.
+    """
+    upi_id = (user.username or "").strip().lower()
+    if not upi_id or not user.password:
+        raise HTTPException(status_code=400, detail="UPI ID and password are required")
     if len(user.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
+    check = verify_vpa(upi_id)
+    if check.status in {"malformed", "not_found"}:
+        raise HTTPException(status_code=400, detail=check.detail)
+    if check.status == "unavailable" and upi_verification_required():
+        raise HTTPException(
+            status_code=503,
+            detail=f"{check.detail} Registration requires verification "
+                   f"(UPI_VERIFY_REQUIRED is set), so please try again shortly.",
+        )
+
     user_id = f"usr_{uuid.uuid4().hex[:8]}"
     hashed = hash_password(user.password)
-    success = create_user(user_id, username, hashed)
+    success = create_user(user_id, upi_id, hashed, upi_id=upi_id, upi_verified=check.ok)
     if not success:
-        raise HTTPException(status_code=400, detail="Username already exists")
+        raise HTTPException(status_code=400, detail="That UPI ID is already registered")
+
     token = create_token(user_id)
-    return {"token": token, "user_id": user_id, "username": username}
+    return {
+        "token": token,
+        "user_id": user_id,
+        "username": upi_id,
+        "upi_id": upi_id,
+        # Only ever true when a provider actually confirmed it.
+        "upi_verified": check.ok and check.checked_with_provider,
+        "verification": check.as_dict(),
+    }
 
 @app.post("/auth/login")
 def login(user: UserAuth):
-    db_user = get_user_by_username(user.username)
+    identifier = (user.username or "").strip().lower()
+    db_user = get_user_by_username(identifier)
     if not db_user or not verify_password(user.password, db_user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    
+        # One message for both cases, so this cannot be used to find out which
+        # UPI IDs are registered.
+        raise HTTPException(status_code=401, detail="Invalid UPI ID or password")
+
     token = create_token(db_user["id"])
-    return {"token": token, "user_id": db_user["id"], "username": db_user["username"]}
+    return {
+        "token": token,
+        "user_id": db_user["id"],
+        "username": db_user["username"],
+        "upi_id": db_user["upi_id"] or db_user["username"],
+        "upi_verified": bool(db_user["upi_verified"]),
+    }
 
 
 
@@ -217,6 +256,21 @@ def login(user: UserAuth):
 @app.get("/")
 def home():
     return {"message": "Edge AI UPI Behaviour Risk System Running"}
+
+
+@app.get("/auth/upi-status")
+def upi_status():
+    """Whether UPI IDs are being checked against the payment network.
+
+    The UI needs to be able to say "format checked" rather than "verified"
+    when no provider is configured.
+    """
+    return {
+        "provider_configured": upi_verifier_configured(),
+        "verification_required": upi_verification_required(),
+        "checks": ["format", "psp handle"]
+        + (["account exists"] if upi_verifier_configured() else []),
+    }
 
 
 @app.get("/health")

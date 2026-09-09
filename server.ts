@@ -308,6 +308,9 @@ app.post(["/auth/register", "/api/auth/register"], (req, res) =>
 app.post(["/auth/login", "/api/auth/login"], (req, res) =>
   proxyToPython(req, res, "/auth/login")
 );
+app.get(["/auth/upi-status", "/api/auth/upi-status"], (req, res) =>
+  proxyToPython(req, res, "/auth/upi-status", "GET")
+);
 
 app.get(["/transactions", "/api/transactions"], requireAuth, (req, res) =>
   proxyToPython(req, res, "/transactions", "GET")
