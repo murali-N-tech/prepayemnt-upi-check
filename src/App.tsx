@@ -1,12 +1,13 @@
 import { useState } from "react";
-import { 
-  FileText, ShieldCheck, Cpu, Share2, AlertTriangle,
-  LineChart, Eye, Bell, Activity, Shield, Menu, X, LogOut, User, ScanLine 
-} from "lucide-react";
 
 import { useAuth } from "./context/AuthContext";
 import { Login } from "./components/Auth/Login";
 import { Register } from "./components/Auth/Register";
+import Landing from "./components/Landing";
+import AppHeader from "./components/layout/AppHeader";
+import { MobileSidebar, Sidebar } from "./components/layout/Sidebar";
+import { navItem, type PageID } from "./components/layout/nav";
+import ErrorBoundary from "./components/ui/ErrorBoundary";
 
 import PayeeCheck from "./components/PayeeCheck.tsx";
 import StatementProfiling from "./components/StatementProfiling.tsx";
@@ -20,53 +21,47 @@ import FraudAlerts from "./components/FraudAlerts.tsx";
 import SystemMonitor from "./components/SystemMonitor.tsx";
 import UserProfile from "./components/UserProfile.tsx";
 
-type PageID =
-  | "Check a Payee"
-  | "Upload Statement"
-  | "User Profile"
-  | "Pre-Payment Risk Check"
-  | "Fraud Detection"
-  | "Fraud Network Graph"
-  | "Fraud Rings"
-  | "Fraud Heatmap"
-  | "Explainability"
-  | "Fraud Alerts"
-  | "System Monitor";
+/** What a signed-out visitor is looking at. */
+type PublicView = "landing" | "login" | "register";
 
 export default function App() {
-  const { isAuthenticated, isLoading, logout, username } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
   const [activePage, setActivePage] = useState<PageID>("Check a Payee");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [showRegister, setShowRegister] = useState(false);
+  const [publicView, setPublicView] = useState<PublicView>("landing");
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-[#0f172a] flex items-center justify-center">
-        <div className="h-8 w-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen bg-canvas flex items-center justify-center">
+        <div className="h-8 w-8 border-2 border-brand border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
 
   if (!isAuthenticated) {
-    if (showRegister) {
-      return <Register onSwitchToLogin={() => setShowRegister(false)} />;
+    if (publicView === "login") {
+      return (
+        <Login
+          onSwitchToRegister={() => setPublicView("register")}
+          onBack={() => setPublicView("landing")}
+        />
+      );
     }
-    return <Login onSwitchToRegister={() => setShowRegister(true)} />;
+    if (publicView === "register") {
+      return (
+        <Register
+          onSwitchToLogin={() => setPublicView("login")}
+          onBack={() => setPublicView("landing")}
+        />
+      );
+    }
+    return (
+      <Landing
+        onSignIn={() => setPublicView("login")}
+        onCreateAccount={() => setPublicView("register")}
+      />
+    );
   }
-
-  const menuItems = [
-    { id: "Check a Payee", label: "Check a Payee", icon: ScanLine },
-    { id: "User Profile", label: "User Profile", icon: User },
-    { id: "Upload Statement", label: "Upload Statement", icon: FileText },
-    { id: "Pre-Payment Risk Check", label: "Pre-Payment Risk Check", icon: ShieldCheck },
-    { id: "Fraud Detection", label: "Fraud Detection", icon: Cpu },
-    { id: "Fraud Network Graph", label: "Fraud Network Graph", icon: Share2 },
-    { id: "Fraud Rings", label: "Fraud Rings", icon: AlertTriangle },
-    { id: "Fraud Heatmap", label: "Fraud Heatmap", icon: LineChart },
-    { id: "Explainability", label: "Explainability", icon: Eye },
-    { id: "Fraud Alerts", label: "Fraud Alerts", icon: Bell },
-    { id: "System Monitor", label: "System Monitor", icon: Activity },
-  ] as const;
 
   const renderActivePage = () => {
     switch (activePage) {
@@ -95,129 +90,34 @@ export default function App() {
     }
   };
 
+  const current = navItem(activePage);
+
   return (
-    <div className="min-h-screen bg-[#0f172a] text-slate-100 flex flex-col font-sans" id="main-app-shell">
-      
-      {/* Upper Navigation bar */}
-      <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-30 px-6 py-4 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-indigo-600/10 text-indigo-400 rounded-lg border border-indigo-500/20">
-            <Shield className="h-6 w-6" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
-              Edge AI UPI Behaviour Risk System
-            </h1>
-            <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block font-mono">
-              PRE-PAYMENT THREAT MITIGATION ENGINE
-            </span>
-          </div>
-        </div>
+    <div className="min-h-screen bg-canvas text-ink font-sans flex flex-col" id="main-app-shell">
+      <AppHeader activePage={activePage} onOpenMenu={() => setMobileMenuOpen(true)} />
 
-        <div className="flex items-center gap-4">
-          <div className="hidden md:flex items-center gap-2 text-sm text-slate-300 mr-2">
-            <span className="h-2 w-2 rounded-full bg-green-500"></span>
-            {username}
+      <div className="flex-1 flex min-h-0">
+        <Sidebar activePage={activePage} onNavigate={setActivePage} />
+        <MobileSidebar
+          open={mobileMenuOpen}
+          onClose={() => setMobileMenuOpen(false)}
+          activePage={activePage}
+          onNavigate={setActivePage}
+        />
+
+        <main className="flex-1 min-w-0">
+          {/* On small screens the header has no room for the page title, so
+              it lives here instead of disappearing. */}
+          <div className="lg:hidden px-4 sm:px-6 pt-6">
+            <h1 className="text-xl font-bold tracking-tight text-ink">{current.label}</h1>
+            <p className="text-sm text-ink-subtle">{current.hint}</p>
           </div>
-          <button
-            onClick={logout}
-            className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition"
-          >
-            <LogOut className="h-4 w-4" />
-            <span className="hidden sm:inline">Sign Out</span>
-          </button>
-          
-          {/* Mobile menu triggers */}
-          <button
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="lg:hidden p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition"
-            aria-label="Toggle Navigation Menu"
-          >
-            {mobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
-          </button>
-        </div>
-      </header>
 
-      <div className="flex-1 flex flex-col lg:flex-row relative">
-        
-        {/* Left Navigation Menu Sidebar (Desktop) */}
-        <aside className="hidden lg:block w-72 bg-slate-900 border-r border-slate-800 p-6 space-y-2 shrink-0">
-          <div className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-4 px-3">
-            Analytic Modules
+          <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full">
+            <div key={activePage} className="animate-fade-in">
+              <ErrorBoundary resetKey={activePage}>{renderActivePage()}</ErrorBoundary>
+            </div>
           </div>
-          <nav className="space-y-1">
-            {menuItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = activePage === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setActivePage(item.id)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
-                    isActive 
-                      ? "bg-indigo-600/10 text-indigo-400 border border-indigo-500/20" 
-                      : "text-slate-400 hover:bg-slate-800/40 hover:text-slate-200 border border-transparent"
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  {item.label}
-                </button>
-              );
-            })}
-          </nav>
-        </aside>
-
-        {/* Floating Side Drawer (Mobile Overlay) */}
-        {mobileMenuOpen && (
-          <div className="lg:hidden fixed inset-0 z-20 bg-slate-950/80 backdrop-blur-sm">
-            <aside className="w-72 h-full bg-slate-900 p-6 flex flex-col justify-between">
-              <div className="space-y-6">
-                <div className="flex justify-between items-center pb-4 border-b border-slate-800">
-                  <span className="text-xs text-slate-500 font-semibold uppercase tracking-wider">
-                    Analytic Modules
-                  </span>
-                  <button
-                    onClick={() => setMobileMenuOpen(false)}
-                    className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded"
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
-                <nav className="space-y-1">
-                  {menuItems.map((item) => {
-                    const Icon = item.icon;
-                    const isActive = activePage === item.id;
-                    return (
-                      <button
-                        key={item.id}
-                        onClick={() => {
-                          setActivePage(item.id);
-                          setMobileMenuOpen(false);
-                        }}
-                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
-                          isActive 
-                            ? "bg-indigo-600/10 text-indigo-400 border border-indigo-500/20" 
-                            : "text-slate-400 hover:bg-slate-800/40 hover:text-slate-200 border border-transparent"
-                        }`}
-                      >
-                        <Icon className="h-4 w-4" />
-                        {item.label}
-                      </button>
-                    );
-                  })}
-                </nav>
-              </div>
-
-              <div className="text-[10px] text-slate-600 font-mono text-center">
-                Edge UPI Secure Guard v1.0.0
-              </div>
-            </aside>
-          </div>
-        )}
-
-        {/* Core Main Panel Frame */}
-        <main className="flex-1 p-6 md:p-8 lg:p-10 max-w-7xl mx-auto w-full overflow-y-auto">
-          {renderActivePage()}
         </main>
       </div>
     </div>

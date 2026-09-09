@@ -38,7 +38,7 @@ export const UpiStatusNote: React.FC<{ status: UpiStatus | null }> = ({ status }
   if (!status) return null;
 
   return (
-    <p className="mt-2 text-xs text-gray-400">
+    <p className="mt-2 text-xs text-ink-muted">
       {status.provider_configured
         ? "Your UPI ID is checked against the payment network before the account is created."
         : "We check the format and the bank handle. The account itself is not verified against the payment network — no verification provider is configured."}

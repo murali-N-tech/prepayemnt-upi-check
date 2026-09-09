@@ -1,7 +1,11 @@
 import React, { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import { AuthShell, fieldClass, labelClass, submitClass } from "./AuthShell";
 
-export const Login: React.FC<{ onSwitchToRegister: () => void }> = ({ onSwitchToRegister }) => {
+export const Login: React.FC<{
+  onSwitchToRegister: () => void;
+  onBack?: () => void;
+}> = ({ onSwitchToRegister, onBack }) => {
   const [upiId, setUpiId] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -16,19 +20,14 @@ export const Login: React.FC<{ onSwitchToRegister: () => void }> = ({ onSwitchTo
     try {
       const response = await fetch("/api/auth/login", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         // The server identifies accounts by UPI ID; `username` is the wire
         // field name it has always used.
         body: JSON.stringify({ username: upiId.trim().toLowerCase(), password }),
       });
 
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || "Login failed");
-      }
+      if (!response.ok) throw new Error(data.detail || "Login failed");
 
       login(data.token, data.user_id, data.upi_id || data.username);
     } catch (err: any) {
@@ -39,67 +38,70 @@ export const Login: React.FC<{ onSwitchToRegister: () => void }> = ({ onSwitchTo
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-900 bg-opacity-90 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]">
-      <div className="w-full max-w-md p-8 bg-gray-800 bg-opacity-60 backdrop-blur-lg rounded-2xl shadow-2xl border border-gray-700">
-        <div className="text-center mb-8">
-          <h2 className="text-3xl font-bold text-white mb-2">Welcome Back</h2>
-          <p className="text-gray-400">Sign in with the UPI ID you pay from</p>
-        </div>
-
+    <AuthShell
+      title="Welcome back"
+      subtitle="Sign in with the UPI ID you pay from."
+      onBack={onBack}
+      footer={
+        <>
+          Don't have an account?{" "}
+          <button
+            onClick={onSwitchToRegister}
+            className="font-semibold text-brand hover:underline"
+          >
+            Create one
+          </button>
+        </>
+      }
+    >
+      <form onSubmit={handleSubmit} className="space-y-5">
         {error && (
-          <div className="bg-red-500 bg-opacity-20 border border-red-500 text-red-100 p-3 rounded-lg mb-6 text-sm text-center">
+          <div
+            role="alert"
+            className="rounded-lg border border-danger/30 bg-danger/10 px-3.5 py-2.5 text-sm text-danger"
+          >
             {error}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">UPI ID</label>
-            <input
-              type="text"
-              required
-              autoComplete="username"
-              spellCheck={false}
-              autoCapitalize="none"
-              value={upiId}
-              onChange={(e) => setUpiId(e.target.value)}
-              className="w-full px-4 py-3 bg-gray-900 bg-opacity-50 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition duration-200"
-              placeholder="yourname@bank"
-            />
-          </div>
+        <div>
+          <label htmlFor="login-upi" className={labelClass}>
+            UPI ID
+          </label>
+          <input
+            id="login-upi"
+            type="text"
+            required
+            autoComplete="username"
+            spellCheck={false}
+            autoCapitalize="none"
+            value={upiId}
+            onChange={(e) => setUpiId(e.target.value)}
+            className={`${fieldClass()} font-mono`}
+            placeholder="yourname@bank"
+          />
+        </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Password</label>
-            <input
-              type="password"
-              required
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-3 bg-gray-900 bg-opacity-50 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition duration-200"
-              placeholder="Enter your password"
-            />
-          </div>
+        <div>
+          <label htmlFor="login-password" className={labelClass}>
+            Password
+          </label>
+          <input
+            id="login-password"
+            type="password"
+            required
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className={fieldClass()}
+            placeholder="Enter your password"
+          />
+        </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-3 px-4 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-semibold rounded-lg shadow-md focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-opacity-75 transition duration-200 disabled:opacity-50"
-          >
-            {loading ? "Signing in..." : "Sign In"}
-          </button>
-        </form>
-
-        <p className="mt-8 text-center text-sm text-gray-400">
-          Don't have an account?{" "}
-          <button
-            onClick={onSwitchToRegister}
-            className="text-purple-400 hover:text-purple-300 font-medium transition duration-200"
-          >
-            Create one
-          </button>
-        </p>
-      </div>
-    </div>
+        <button type="submit" disabled={loading} className={submitClass}>
+          {loading ? "Signing in…" : "Sign in"}
+        </button>
+      </form>
+    </AuthShell>
   );
 };

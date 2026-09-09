@@ -3,7 +3,31 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Edge UPI Behaviour Risk System</title>
+    <meta
+      name="description"
+      content="Check who you are paying before the money leaves: UPI ID, QR code and payee-graph checks that run before a payment is approved."
+    />
+    <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f4f6fa" media="(prefers-color-scheme: light)" />
+    <title>Edge AI UPI &middot; Behavioural Risk Intelligence</title>
+    <script>
+      // Apply the saved theme before the first paint. Without this the page
+      // renders light for one frame and then snaps to dark, which reads as a
+      // bug every single load.
+      (function () {
+        try {
+          var saved = localStorage.getItem("theme");
+          var dark =
+            saved === "dark" ||
+            ((saved === null || saved === "system") &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+          document.documentElement.style.colorScheme = dark ? "dark" : "light";
+        } catch (e) {
+          /* Storage blocked: fall through to the OS setting at mount. */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { AlertTriangle, ShieldAlert, Cpu } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { useAuth } from "../context/AuthContext";
+import { tooltipProps, useChartTheme } from "../lib/chartTheme";
 
 interface ShapFeature {
   name: string;
@@ -9,6 +10,7 @@ interface ShapFeature {
 }
 
 export default function Explainability() {
+  const chart = useChartTheme();
   const { api } = useAuth();
   const [txId, setTxId] = useState("");
   const [loading, setLoading] = useState(false);
@@ -51,32 +53,32 @@ export default function Explainability() {
   return (
     <div className="space-y-8 animate-fade-in" id="shap-explainability-container">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight text-white mb-2">Model Explainability (SHAP)</h1>
-        <p className="text-slate-400">
+        <h1 className="text-3xl font-bold tracking-tight text-ink mb-2">Model Explainability (SHAP)</h1>
+        <p className="text-ink-muted">
           Decodes the underlying ensemble machine learning model weights, plotting SHAP values to explain individual UPI payment score allocations.
         </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Input panel */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 h-fit">
-          <h2 className="text-xl font-semibold text-white mb-4">Explain Prediction</h2>
+        <div className="bg-surface border border-line rounded-xl p-6 h-fit">
+          <h2 className="text-xl font-semibold text-ink mb-4">Explain Prediction</h2>
 
           <form onSubmit={handleExplain} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">Transaction ID</label>
+              <label className="block text-sm font-medium text-ink-muted mb-1">Transaction ID</label>
               <input
                 type="text"
                 value={txId}
                 onChange={(e) => setTxId(e.target.value)}
                 placeholder="e.g. tx_e6c4ac"
                 required
-                className="w-full px-4 py-2 bg-slate-950 border border-slate-800 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-4 py-2 bg-inset border border-line rounded-lg text-ink placeholder-ink-subtle focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
 
             {error && (
-              <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-sm rounded-lg p-3 flex gap-2">
+              <div className="bg-red-500/10 border border-red-500/20 text-danger text-sm rounded-lg p-3 flex gap-2">
                 <AlertTriangle className="h-5 w-5 shrink-0" />
                 <span>{error}</span>
               </div>
@@ -98,8 +100,8 @@ export default function Explainability() {
             </button>
           </form>
 
-          <div className="mt-6 pt-4 border-t border-slate-800 text-xs text-slate-500 space-y-2">
-            <h4 className="font-semibold text-slate-400 uppercase">How to read:</h4>
+          <div className="mt-6 pt-4 border-t border-line text-xs text-ink-subtle space-y-2">
+            <h4 className="font-semibold text-ink-muted uppercase">How to read:</h4>
             <p>
               Positive values (red) represent variables that contributed to accelerating/increasing the transaction's fraud risk score.
             </p>
@@ -110,26 +112,26 @@ export default function Explainability() {
         </div>
 
         {/* Visualizer Panel */}
-        <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-6">
+        <div className="lg:col-span-2 bg-surface border border-line rounded-xl p-6">
           {features.length > 0 ? (
             <div className="space-y-6 animate-fade-in" id="shap-chart-container">
-              <h3 className="text-lg font-semibold text-white">SHAP Waterfall Distribution</h3>
+              <h3 className="text-lg font-semibold text-ink">SHAP Waterfall Distribution</h3>
 
               <div className="h-80">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={features} layout="vertical" margin={{ left: 30, right: 30 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis type="number" stroke="#94a3b8" fontSize={11} tickLine={false} />
-                    <YAxis dataKey="name" type="category" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} />
+                    <XAxis type="number" stroke={chart.axis} fontSize={11} tickLine={false} />
+                    <YAxis dataKey="name" type="category" stroke={chart.axis} fontSize={11} tickLine={false} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: "#1e293b", borderColor: "#334155", borderRadius: "8px" }}
-                      labelStyle={{ color: "#fff" }}
+                      {...tooltipProps(chart)}
+                      
                     />
                     <Bar dataKey="value">
                       {features.map((entry, index) => (
                         <Cell
                           key={`cell-${index}`}
-                          fill={entry.value >= 0 ? "#f43f5e" : "#10b981"}
+                          fill={entry.value >= 0 ? chart.danger : chart.ok}
                         />
                       ))}
                     </Bar>
@@ -138,12 +140,12 @@ export default function Explainability() {
               </div>
 
               {/* Auxiliary Summary */}
-              <div className="bg-slate-950 rounded-xl p-4 border border-slate-900 flex items-start gap-3">
-                <ShieldAlert className="h-5 w-5 text-indigo-400 mt-0.5 shrink-0" />
+              <div className="bg-inset rounded-xl p-4 border border-line flex items-start gap-3">
+                <ShieldAlert className="h-5 w-5 text-brand mt-0.5 shrink-0" />
                 <div>
-                  <h4 className="text-xs font-semibold text-white uppercase">SHAP Attribution Inference</h4>
-                  <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                    The leading feature impact is <strong className="text-slate-200">
+                  <h4 className="text-xs font-semibold text-ink uppercase">SHAP Attribution Inference</h4>
+                  <p className="text-xs text-ink-muted mt-1 leading-relaxed">
+                    The leading feature impact is <strong className="text-ink">
                       {features.reduce((prev, curr) => Math.abs(curr.value) > Math.abs(prev.value) ? curr : prev).name}
                     </strong>. Model decision borders conform to behavioral bounds.
                   </p>
@@ -152,9 +154,9 @@ export default function Explainability() {
             </div>
           ) : (
             <div className="h-full min-h-[300px] flex flex-col items-center justify-center text-center p-12">
-              <Cpu className="h-16 w-16 text-slate-800 mb-4" />
-              <h3 className="text-lg font-semibold text-white mb-1">Enter Transaction ID</h3>
-              <p className="text-slate-400 max-w-sm text-sm">
+              <Cpu className="h-16 w-16 text-ink-faint mb-4" />
+              <h3 className="text-lg font-semibold text-ink mb-1">Enter Transaction ID</h3>
+              <p className="text-ink-muted max-w-sm text-sm">
                 Enter a transaction reference ID from the logs on the left panel to execute full model attribution explainer overlays.
               </p>
             </div>

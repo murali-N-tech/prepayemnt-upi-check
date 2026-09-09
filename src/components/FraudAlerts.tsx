@@ -14,7 +14,7 @@ export default function FraudAlerts() {
     setError(null);
     try {
       const data = await api<Transaction[]>("/api/transactions");
-      const filtered = (data || []).filter(t => t.risk === 1);
+      const filtered = (Array.isArray(data) ? data : []).filter(t => t.risk === 1);
       setAlerts(filtered);
     } catch (err: any) {
       setError(err.message || "Something went wrong");
@@ -30,8 +30,8 @@ export default function FraudAlerts() {
   return (
     <div className="space-y-8 animate-fade-in" id="fraud-alerts-container">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight text-white mb-2">Real-Time Fraud Alerts</h1>
-        <p className="text-slate-400">
+        <h1 className="text-3xl font-bold tracking-tight text-ink mb-2">Real-Time Fraud Alerts</h1>
+        <p className="text-ink-muted">
           Displays a live stream of transactions actively flagged as HIGH risk or blocked due to behavioral anomalies.
         </p>
       </div>
@@ -41,15 +41,15 @@ export default function FraudAlerts() {
           <div className="h-10 w-10 border-2 border-rose-500 border-t-transparent rounded-full animate-spin" />
         </div>
       ) : error ? (
-        <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl p-4">
+        <div className="bg-rose-500/10 border border-rose-500/20 text-danger rounded-xl p-4">
           {error}
         </div>
       ) : alerts.length === 0 ? (
-        <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl p-6 flex items-start gap-4 max-w-2xl">
-          <CheckCircle className="h-8 w-8 text-emerald-400 mt-0.5 shrink-0" />
+        <div className="bg-emerald-500/10 border border-emerald-500/20 text-ok rounded-xl p-6 flex items-start gap-4 max-w-2xl">
+          <CheckCircle className="h-8 w-8 text-ok mt-0.5 shrink-0" />
           <div>
-            <h3 className="text-lg font-semibold text-white">Security Stream Clear</h3>
-            <p className="text-slate-300 text-sm mt-1">
+            <h3 className="text-lg font-semibold text-ink">Security Stream Clear</h3>
+            <p className="text-ink-muted text-sm mt-1">
               No transactions currently match threat profile rules. The live payment processing channels are fully secure.
             </p>
           </div>
@@ -59,50 +59,50 @@ export default function FraudAlerts() {
           {alerts.map((alert, idx) => (
             <div
               key={idx}
-              className="bg-slate-900 border border-rose-500/20 hover:border-rose-500/30 rounded-xl p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition relative overflow-hidden"
+              className="bg-surface border border-rose-500/20 hover:border-rose-500/30 rounded-xl p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition relative overflow-hidden"
             >
               {/* Left threat accent */}
               <div className="absolute top-0 bottom-0 left-0 w-1.5 bg-rose-500" />
 
               <div className="flex items-start gap-4">
-                <div className="p-3 bg-rose-500/10 text-rose-400 rounded-lg shrink-0">
+                <div className="p-3 bg-rose-500/10 text-danger rounded-lg shrink-0">
                   <AlertOctagon className="h-6 w-6" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-mono text-xs font-bold text-rose-400 bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 rounded">
+                    <span className="font-mono text-xs font-bold text-danger bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 rounded">
                       BLOCK TRIGGERED
                     </span>
-                    <span className="text-xs text-slate-500 font-mono">ID: {alert.transaction_id}</span>
+                    <span className="text-xs text-ink-subtle font-mono">ID: {alert.transaction_id}</span>
                   </div>
 
-                  <div className="flex items-center gap-1.5 mt-2 text-base font-bold text-white flex-wrap">
+                  <div className="flex items-center gap-1.5 mt-2 text-base font-bold text-ink flex-wrap">
                     <span className="font-mono">{alert.sender}</span>
-                    <ArrowRight className="h-4 w-4 text-slate-500" />
-                    <span className="font-semibold text-slate-300">{alert.receiver || "Unnamed Receiver"}</span>
+                    <ArrowRight className="h-4 w-4 text-ink-subtle" />
+                    <span className="font-semibold text-ink-muted">{alert.receiver || "Unnamed Receiver"}</span>
                   </div>
 
-                  <div className="flex items-center gap-4 text-xs text-slate-500 mt-2">
+                  <div className="flex items-center gap-4 text-xs text-ink-subtle mt-2">
                     <span className="flex items-center gap-1">
                       <Calendar className="h-3.5 w-3.5" />
                       {alert.timestamp}
                     </span>
                     <span className="flex items-center gap-1">
-                      <ShieldAlert className="h-3.5 w-3.5 text-rose-400" />
+                      <ShieldAlert className="h-3.5 w-3.5 text-danger" />
                       Velocity Score: {alert.velocity_score}
                     </span>
                   </div>
                 </div>
               </div>
 
-              <div className="flex md:flex-col items-end gap-3 md:gap-1 shrink-0 self-stretch md:self-auto justify-between md:justify-center border-t border-slate-800 md:border-t-0 pt-3 md:pt-0">
-                <div className="flex items-center gap-1 text-2xl font-black text-rose-500">
+              <div className="flex md:flex-col items-end gap-3 md:gap-1 shrink-0 self-stretch md:self-auto justify-between md:justify-center border-t border-line md:border-t-0 pt-3 md:pt-0">
+                <div className="flex items-center gap-1 text-2xl font-black text-danger">
                   <DollarSign className="h-5 w-5 -mr-1" />
                   {alert.amount}
                 </div>
                 <div className="text-right">
-                  <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block">Threat Score</span>
-                  <span className="text-xs font-bold text-rose-400 font-mono">{alert.risk_score}/100</span>
+                  <span className="text-[10px] text-ink-subtle font-semibold uppercase tracking-wider block">Threat Score</span>
+                  <span className="text-xs font-bold text-danger font-mono">{alert.risk_score}/100</span>
                 </div>
               </div>
             </div>

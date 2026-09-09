@@ -9,10 +9,11 @@ import {
 } from "recharts";
 import { BehaviorProfile, StatementTransaction, StatementTransactionsPage } from "../types";
 import { useAuth } from "../context/AuthContext";
+import { tooltipProps, useChartTheme } from "../lib/chartTheme";
 
-const CHART_COLORS = ["#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd", "#818cf8", "#4f46e5", "#7c3aed", "#5b21b6", "#6d28d9", "#4338ca"];
 
 export default function UserProfile() {
+  const chart = useChartTheme();
   const { api, token, username } = useAuth();
   const [profile, setProfile] = useState<BehaviorProfile | null>(null);
   const [transactions, setTransactions] = useState<StatementTransaction[]>([]);
@@ -126,8 +127,8 @@ export default function UserProfile() {
   const SortIcon = ({ colKey }: { colKey: string }) => {
     if (txSort.key !== colKey) return <ChevronDown className="h-3 w-3 opacity-30" />;
     return txSort.dir === "asc"
-      ? <ChevronUp className="h-3 w-3 text-indigo-400" />
-      : <ChevronDown className="h-3 w-3 text-indigo-400" />;
+      ? <ChevronUp className="h-3 w-3 text-brand" />
+      : <ChevronDown className="h-3 w-3 text-brand" />;
   };
 
   const formatTimestamp = (ts: string) => {
@@ -167,13 +168,13 @@ export default function UserProfile() {
     return (
       <div className="space-y-8 animate-fade-in h-full flex flex-col" id="user-profile-container">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-white mb-2">My Profile</h1>
-          <p className="text-slate-400">View your personalized payment behavior statistics.</p>
+          <h1 className="text-3xl font-bold tracking-tight text-ink mb-2">My Profile</h1>
+          <p className="text-ink-muted">View your personalized payment behavior statistics.</p>
         </div>
-        <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-12 text-center flex-1 flex flex-col justify-center items-center">
-          <User className="h-16 w-16 text-slate-700 mb-4" />
-          <h3 className="text-lg font-semibold text-white mb-1">No Profile Found</h3>
-          <p className="text-slate-400 max-w-md text-sm">
+        <div className="bg-surface/40 border border-line rounded-xl p-12 text-center flex-1 flex flex-col justify-center items-center">
+          <User className="h-16 w-16 text-ink-faint mb-4" />
+          <h3 className="text-lg font-semibold text-ink mb-1">No Profile Found</h3>
+          <p className="text-ink-muted max-w-md text-sm">
             You haven't generated a behavior profile yet. Head over to the Upload Statement page to extract your data.
           </p>
         </div>
@@ -185,11 +186,11 @@ export default function UserProfile() {
     <div className="space-y-8 animate-fade-in" id="user-profile-container">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold tracking-tight text-white mb-2">My Profile</h1>
-        <p className="text-slate-400">
-          Personalized payment behavior dashboard for <span className="font-semibold text-indigo-400">{username}</span>.
+        <h1 className="text-3xl font-bold tracking-tight text-ink mb-2">My Profile</h1>
+        <p className="text-ink-muted">
+          Personalized payment behavior dashboard for <span className="font-semibold text-brand">{username}</span>.
           {transactions.length > 0 && (
-            <span className="text-slate-500 ml-2">
+            <span className="text-ink-subtle ml-2">
               · {totalCount} transactions extracted
               {truncated && ` (showing the most recent ${transactions.length})`}
             </span>
@@ -198,7 +199,7 @@ export default function UserProfile() {
       </div>
 
       {profile && (profile.transactions_without_time ?? 0) > 0 && (
-        <div className="bg-amber-500/10 border border-amber-500/20 text-amber-300 text-sm rounded-lg p-4 flex items-start gap-3">
+        <div className="bg-amber-500/10 border border-amber-500/20 text-warn text-sm rounded-lg p-4 flex items-start gap-3">
           <Clock className="h-5 w-5 shrink-0 mt-0.5" />
           <span>
             {profile.transactions_without_time} of {profile.transaction_count} transactions
@@ -214,57 +215,57 @@ export default function UserProfile() {
       {/* ── Metrics Strip ── */}
       {profile && (
         <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-4" id="metrics-grid">
-          <div className="bg-gradient-to-br from-indigo-600/10 to-slate-900 border border-indigo-500/20 rounded-xl p-4">
+          <div className="bg-gradient-to-br from-indigo-600/10 to-surface border border-indigo-500/20 rounded-xl p-4">
             <div className="flex justify-between items-start mb-2">
-              <span className="text-xs font-semibold text-indigo-300/70 uppercase">Transactions</span>
-              <Activity className="h-4 w-4 text-indigo-400" />
+              <span className="text-xs font-semibold text-brand/70 uppercase">Transactions</span>
+              <Activity className="h-4 w-4 text-brand" />
             </div>
-            <div className="text-2xl font-bold text-white">{profile.transaction_count}</div>
-            <div className="text-xs text-slate-500 mt-1">Total analyzed</div>
+            <div className="text-2xl font-bold text-ink">{profile.transaction_count}</div>
+            <div className="text-xs text-ink-subtle mt-1">Total analyzed</div>
           </div>
 
-          <div className="bg-gradient-to-br from-violet-600/10 to-slate-900 border border-violet-500/20 rounded-xl p-4">
+          <div className="bg-gradient-to-br from-violet-600/10 to-surface border border-violet-500/20 rounded-xl p-4">
             <div className="flex justify-between items-start mb-2">
-              <span className="text-xs font-semibold text-violet-300/70 uppercase">Avg Ticket</span>
-              <DollarSign className="h-4 w-4 text-violet-400" />
+              <span className="text-xs font-semibold text-violet-700/70 dark:text-violet-300/70 uppercase">Avg Ticket</span>
+              <DollarSign className="h-4 w-4 text-violet-700 dark:text-violet-400" />
             </div>
-            <div className="text-2xl font-bold text-white">₹{profile.avg_amount?.toLocaleString("en-IN")}</div>
-            <div className="text-xs text-slate-500 mt-1">Mean txn size</div>
+            <div className="text-2xl font-bold text-ink">₹{profile.avg_amount?.toLocaleString("en-IN")}</div>
+            <div className="text-xs text-ink-subtle mt-1">Mean txn size</div>
           </div>
 
-          <div className="bg-gradient-to-br from-rose-600/10 to-slate-900 border border-rose-500/20 rounded-xl p-4">
+          <div className="bg-gradient-to-br from-rose-600/10 to-surface border border-rose-500/20 rounded-xl p-4">
             <div className="flex justify-between items-start mb-2">
-              <span className="text-xs font-semibold text-rose-300/70 uppercase">Peak Ticket</span>
-              <TrendingUp className="h-4 w-4 text-rose-400" />
+              <span className="text-xs font-semibold text-danger/70 uppercase">Peak Ticket</span>
+              <TrendingUp className="h-4 w-4 text-danger" />
             </div>
-            <div className="text-2xl font-bold text-white">₹{profile.max_amount?.toLocaleString("en-IN")}</div>
-            <div className="text-xs text-slate-500 mt-1">Highest single txn</div>
+            <div className="text-2xl font-bold text-ink">₹{profile.max_amount?.toLocaleString("en-IN")}</div>
+            <div className="text-xs text-ink-subtle mt-1">Highest single txn</div>
           </div>
 
-          <div className="bg-gradient-to-br from-amber-600/10 to-slate-900 border border-amber-500/20 rounded-xl p-4">
+          <div className="bg-gradient-to-br from-amber-600/10 to-surface border border-amber-500/20 rounded-xl p-4">
             <div className="flex justify-between items-start mb-2">
-              <span className="text-xs font-semibold text-amber-300/70 uppercase">Active Hour</span>
-              <Clock className="h-4 w-4 text-amber-400" />
+              <span className="text-xs font-semibold text-warn/70 uppercase">Active Hour</span>
+              <Clock className="h-4 w-4 text-warn" />
             </div>
-            <div className="text-2xl font-bold text-white">
+            <div className="text-2xl font-bold text-ink">
               {profile.most_active_hour !== null && profile.most_active_hour !== undefined
                 ? `${String(profile.most_active_hour).padStart(2, "0")}:00`
                 : "Not in statement"}
             </div>
-            <div className="text-xs text-slate-500 mt-1">
+            <div className="text-xs text-ink-subtle mt-1">
               {profile.most_active_hour !== null && profile.most_active_hour !== undefined
                 ? "Most recurring"
                 : "No transaction times to read"}
             </div>
           </div>
 
-          <div className="bg-gradient-to-br from-emerald-600/10 to-slate-900 border border-emerald-500/20 rounded-xl p-4 hidden xl:block">
+          <div className="bg-gradient-to-br from-emerald-600/10 to-surface border border-emerald-500/20 rounded-xl p-4 hidden xl:block">
             <div className="flex justify-between items-start mb-2">
-              <span className="text-xs font-semibold text-emerald-300/70 uppercase">Merchants</span>
-              <CreditCard className="h-4 w-4 text-emerald-400" />
+              <span className="text-xs font-semibold text-ok/70 uppercase">Merchants</span>
+              <CreditCard className="h-4 w-4 text-ok" />
             </div>
-            <div className="text-2xl font-bold text-white">{uniqueMerchants}</div>
-            <div className="text-xs text-slate-500 mt-1">Unique payees</div>
+            <div className="text-2xl font-bold text-ink">{uniqueMerchants}</div>
+            <div className="text-xs text-ink-subtle mt-1">Unique payees</div>
           </div>
         </div>
       )}
@@ -273,39 +274,39 @@ export default function UserProfile() {
       {profile && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Merchant Frequency */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-            <h3 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
-              <CreditCard className="h-4 w-4 text-indigo-400" />
+          <div className="bg-surface border border-line rounded-xl p-5">
+            <h3 className="text-base font-semibold text-ink mb-4 flex items-center gap-2">
+              <CreditCard className="h-4 w-4 text-brand" />
               Top Merchants
             </h3>
             <div className="h-64">
               {getFrequencyData().length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={getFrequencyData()} barSize={28}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                    <XAxis dataKey="name" stroke="#64748b" fontSize={10} tickLine={false} angle={-20} textAnchor="end" height={50} />
-                    <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} />
+                    <XAxis dataKey="name" stroke={chart.axis} fontSize={10} tickLine={false} angle={-20} textAnchor="end" height={50} />
+                    <YAxis stroke={chart.axis} fontSize={11} tickLine={false} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: "#1e293b", borderColor: "#334155", borderRadius: "8px", fontSize: "12px" }}
-                      labelStyle={{ color: "#fff" }}
+                      {...tooltipProps(chart)}
+                      
                     />
                     <Bar dataKey="count" radius={[6, 6, 0, 0]}>
                       {getFrequencyData().map((_, i) => (
-                        <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                        <Cell key={i} fill={chart.series[i % chart.series.length]} />
                       ))}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="h-full flex items-center justify-center text-slate-600 text-sm">No merchant data</div>
+                <div className="h-full flex items-center justify-center text-ink-subtle text-sm">No merchant data</div>
               )}
             </div>
           </div>
 
           {/* Monthly Volume */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-            <h3 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
-              <TrendingUp className="h-4 w-4 text-rose-400" />
+          <div className="bg-surface border border-line rounded-xl p-5">
+            <h3 className="text-base font-semibold text-ink mb-4 flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-danger" />
               Monthly UPI Volume
             </h3>
             <div className="h-64">
@@ -314,57 +315,57 @@ export default function UserProfile() {
                   <AreaChart data={getMonthlyData()}>
                     <defs>
                       <linearGradient id="monthGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
+                        <stop offset="5%" stopColor={chart.brand} stopOpacity={0.3} />
+                        <stop offset="95%" stopColor={chart.brand} stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                    <XAxis dataKey="month" stroke="#64748b" fontSize={11} tickLine={false} />
-                    <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} />
+                    <XAxis dataKey="month" stroke={chart.axis} fontSize={11} tickLine={false} />
+                    <YAxis stroke={chart.axis} fontSize={11} tickLine={false} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: "#1e293b", borderColor: "#334155", borderRadius: "8px", fontSize: "12px" }}
-                      labelStyle={{ color: "#fff" }}
+                      {...tooltipProps(chart)}
+                      
                       formatter={(value: number) => [`₹${value.toLocaleString("en-IN")}`, "Volume"]}
                     />
-                    <Area type="monotone" dataKey="total" stroke="#f43f5e" strokeWidth={2.5} fill="url(#monthGrad)" dot={{ r: 4, fill: "#f43f5e" }} />
+                    <Area type="monotone" dataKey="total" stroke={chart.brand} strokeWidth={2.5} fill="url(#monthGrad)" dot={{ r: 4, fill: chart.brand }} />
                   </AreaChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="h-full flex items-center justify-center text-slate-600 text-sm">No monthly data</div>
+                <div className="h-full flex items-center justify-center text-ink-subtle text-sm">No monthly data</div>
               )}
             </div>
           </div>
 
           {/* Hourly Distribution */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-            <h3 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
-              <Clock className="h-4 w-4 text-amber-400" />
+          <div className="bg-surface border border-line rounded-xl p-5">
+            <h3 className="text-base font-semibold text-ink mb-4 flex items-center gap-2">
+              <Clock className="h-4 w-4 text-warn" />
               Hourly Activity Distribution
             </h3>
             <div className="h-64">
               {getHourlyData().some(d => d.count > 0) ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={getHourlyData()} barSize={12}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                    <XAxis dataKey="hour" stroke="#64748b" fontSize={9} tickLine={false} interval={2} />
-                    <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} />
+                    <XAxis dataKey="hour" stroke={chart.axis} fontSize={9} tickLine={false} interval={2} />
+                    <YAxis stroke={chart.axis} fontSize={11} tickLine={false} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: "#1e293b", borderColor: "#334155", borderRadius: "8px", fontSize: "12px" }}
-                      labelStyle={{ color: "#fff" }}
+                      {...tooltipProps(chart)}
+                      
                     />
-                    <Bar dataKey="count" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="count" fill={chart.warn} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="h-full flex items-center justify-center text-slate-600 text-sm">No hourly data</div>
+                <div className="h-full flex items-center justify-center text-ink-subtle text-sm">No hourly data</div>
               )}
             </div>
           </div>
 
           {/* Merchant Distribution Pie */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-            <h3 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
-              <Activity className="h-4 w-4 text-violet-400" />
+          <div className="bg-surface border border-line rounded-xl p-5">
+            <h3 className="text-base font-semibold text-ink mb-4 flex items-center gap-2">
+              <Activity className="h-4 w-4 text-violet-700 dark:text-violet-400" />
               Payment Distribution
             </h3>
             <div className="h-64">
@@ -381,22 +382,22 @@ export default function UserProfile() {
                       dataKey="value"
                     >
                       {getMerchantPieData().map((_, i) => (
-                        <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} stroke="none" />
+                        <Cell key={i} fill={chart.series[i % chart.series.length]} stroke="none" />
                       ))}
                     </Pie>
                     <Tooltip
-                      contentStyle={{ backgroundColor: "#1e293b", borderColor: "#334155", borderRadius: "8px", fontSize: "12px" }}
+                      {...tooltipProps(chart)}
                     />
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="h-full flex items-center justify-center text-slate-600 text-sm">No distribution data</div>
+                <div className="h-full flex items-center justify-center text-ink-subtle text-sm">No distribution data</div>
               )}
               {/* Legend */}
               <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 justify-center">
                 {getMerchantPieData().map((item, i) => (
-                  <div key={i} className="flex items-center gap-1.5 text-xs text-slate-400">
-                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }} />
+                  <div key={i} className="flex items-center gap-1.5 text-xs text-ink-muted">
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: chart.series[i % chart.series.length] }} />
                     {item.name.length > 16 ? item.name.substring(0, 14) + "…" : item.name}
                   </div>
                 ))}
@@ -408,37 +409,37 @@ export default function UserProfile() {
 
       {/* ── Auxiliary Insights ── */}
       {profile && (
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-          <h3 className="text-base font-semibold text-white mb-3 flex items-center gap-2">
-            <Activity className="h-4 w-4 text-indigo-400" />
+        <div className="bg-surface border border-line rounded-xl p-5">
+          <h3 className="text-base font-semibold text-ink mb-3 flex items-center gap-2">
+            <Activity className="h-4 w-4 text-brand" />
             Auxiliary Parameters
           </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 text-sm text-slate-300">
-            <div className="p-3 bg-slate-950/60 rounded-lg border border-slate-800/50">
-              <span className="text-slate-500 block mb-1 text-xs uppercase font-semibold">Night Txn Ratio</span>
-              <span className="font-semibold text-white">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 text-sm text-ink-muted">
+            <div className="p-3 bg-inset/60 rounded-lg border border-line/50">
+              <span className="text-ink-subtle block mb-1 text-xs uppercase font-semibold">Night Txn Ratio</span>
+              <span className="font-semibold text-ink">
                 {profile.transaction_count > 0
                   ? Math.round((profile.night_transactions / profile.transaction_count) * 100)
                   : 0}%
               </span>
-              <span className="text-slate-500 text-xs ml-1">({profile.night_transactions} txns)</span>
+              <span className="text-ink-subtle text-xs ml-1">({profile.night_transactions} txns)</span>
             </div>
-            <div className="p-3 bg-slate-950/60 rounded-lg border border-slate-800/50">
-              <span className="text-slate-500 block mb-1 text-xs uppercase font-semibold">Weekend Activity</span>
-              <span className="font-semibold text-white">{profile.weekend_transactions}</span>
-              <span className="text-slate-500 text-xs ml-1">transactions</span>
+            <div className="p-3 bg-inset/60 rounded-lg border border-line/50">
+              <span className="text-ink-subtle block mb-1 text-xs uppercase font-semibold">Weekend Activity</span>
+              <span className="font-semibold text-ink">{profile.weekend_transactions}</span>
+              <span className="text-ink-subtle text-xs ml-1">transactions</span>
             </div>
-            <div className="p-3 bg-slate-950/60 rounded-lg border border-slate-800/50">
-              <span className="text-slate-500 block mb-1 text-xs uppercase font-semibold">Daily Avg</span>
-              <span className="font-semibold text-white">{profile.average_daily_transactions}</span>
-              <span className="text-slate-500 text-xs ml-1">txs/day</span>
+            <div className="p-3 bg-inset/60 rounded-lg border border-line/50">
+              <span className="text-ink-subtle block mb-1 text-xs uppercase font-semibold">Daily Avg</span>
+              <span className="font-semibold text-ink">{profile.average_daily_transactions}</span>
+              <span className="text-ink-subtle text-xs ml-1">txs/day</span>
             </div>
-            <div className="p-3 bg-slate-950/60 rounded-lg border border-slate-800/50">
-              <span className="text-slate-500 block mb-1 text-xs uppercase font-semibold">Failed Rate</span>
-              <span className="font-semibold text-white">
+            <div className="p-3 bg-inset/60 rounded-lg border border-line/50">
+              <span className="text-ink-subtle block mb-1 text-xs uppercase font-semibold">Failed Rate</span>
+              <span className="font-semibold text-ink">
                 {profile.failed_transactions} / {profile.transaction_count}
               </span>
-              <span className="text-slate-500 text-xs ml-1">
+              <span className="text-ink-subtle text-xs ml-1">
                 ({profile.transaction_count > 0 ? Math.round((profile.failed_transactions / profile.transaction_count) * 100) : 0}%)
               </span>
             </div>
@@ -446,11 +447,11 @@ export default function UserProfile() {
 
           {/* Known UPI IDs */}
           {profile.known_upi_ids && profile.known_upi_ids.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-slate-800/50">
-              <span className="text-xs font-semibold text-slate-500 uppercase block mb-2">Known UPI IDs</span>
+            <div className="mt-4 pt-4 border-t border-line/50">
+              <span className="text-xs font-semibold text-ink-subtle uppercase block mb-2">Known UPI IDs</span>
               <div className="flex flex-wrap gap-2">
                 {profile.known_upi_ids.map((upi, i) => (
-                  <span key={i} className="px-2.5 py-1 bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 rounded-full text-xs font-mono">
+                  <span key={i} className="px-2.5 py-1 bg-indigo-500/10 border border-indigo-500/20 text-brand rounded-full text-xs font-mono">
                     {upi}
                   </span>
                 ))}
@@ -462,26 +463,26 @@ export default function UserProfile() {
 
       {/* ── Extracted Transactions Table ── */}
       {transactions.length > 0 && (
-        <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden" id="transactions-table-container">
-          <div className="p-5 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="bg-surface border border-line rounded-xl overflow-hidden" id="transactions-table-container">
+          <div className="p-5 border-b border-line flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
-              <h3 className="text-base font-semibold text-white flex items-center gap-2">
-                <CreditCard className="h-4 w-4 text-indigo-400" />
+              <h3 className="text-base font-semibold text-ink flex items-center gap-2">
+                <CreditCard className="h-4 w-4 text-brand" />
                 Extracted Transactions
               </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <p className="text-xs text-ink-subtle mt-0.5">
                 {filteredTxs.length} of {transactions.length} transactions
-                {totalSpent > 0 && <> · Total volume: <span className="text-slate-300">₹{totalSpent.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span></>}
+                {totalSpent > 0 && <> · Total volume: <span className="text-ink-muted">₹{totalSpent.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span></>}
               </p>
             </div>
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-ink-subtle" />
               <input
                 type="text"
                 value={txSearch}
                 onChange={e => { setTxSearch(e.target.value); setTxPage(0); }}
                 placeholder="Search merchant, UPI ID, amount…"
-                className="pl-9 pr-3 py-2 text-sm bg-slate-950 border border-slate-800 rounded-lg text-slate-300 placeholder-slate-600 focus:outline-none focus:border-indigo-500/50 w-full sm:w-72 transition"
+                className="pl-9 pr-3 py-2 text-sm bg-inset border border-line rounded-lg text-ink-muted placeholder-ink-subtle focus:outline-none focus:border-indigo-500/50 w-full sm:w-72 transition"
               />
             </div>
           </div>
@@ -489,7 +490,7 @@ export default function UserProfile() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="bg-slate-950/60">
+                <tr className="bg-inset/60">
                   {[
                     { key: "timestamp", label: "Date & Time" },
                     { key: "merchant", label: "Merchant / Payee" },
@@ -501,7 +502,7 @@ export default function UserProfile() {
                     <th
                       key={col.key}
                       onClick={() => toggleSort(col.key)}
-                      className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer hover:text-slate-300 transition select-none"
+                      className="px-4 py-3 text-left text-xs font-semibold text-ink-subtle uppercase tracking-wider cursor-pointer hover:text-ink-muted transition select-none"
                     >
                       <div className="flex items-center gap-1">
                         {col.label}
@@ -511,46 +512,46 @@ export default function UserProfile() {
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/50">
+              <tbody className="divide-y divide-line/50">
                 {visibleTxs.map((tx, idx) => (
-                  <tr key={idx} className="hover:bg-slate-800/30 transition">
-                    <td className="px-4 py-3 whitespace-nowrap text-slate-300 text-xs font-mono">
+                  <tr key={idx} className="hover:bg-raised/30 transition">
+                    <td className="px-4 py-3 whitespace-nowrap text-ink-muted text-xs font-mono">
                       {formatTimestamp(tx.timestamp)}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="text-white text-sm font-medium truncate max-w-[200px]" title={tx.merchant}>
+                      <div className="text-ink text-sm font-medium truncate max-w-[200px]" title={tx.merchant}>
                         {tx.merchant}
                       </div>
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
-                      <span className="font-semibold text-white">₹{tx.amount?.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
+                      <span className="font-semibold text-ink">₹{tx.amount?.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       {tx.upi_id ? (
-                        <span className="text-xs font-mono text-indigo-300 bg-indigo-500/10 px-2 py-0.5 rounded-md">{tx.upi_id}</span>
+                        <span className="text-xs font-mono text-brand bg-indigo-500/10 px-2 py-0.5 rounded-md">{tx.upi_id}</span>
                       ) : (
-                        <span className="text-slate-600 text-xs">—</span>
+                        <span className="text-ink-subtle text-xs">—</span>
                       )}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
                         tx.status === "SUCCESS"
-                          ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                          ? "bg-emerald-500/10 text-ok border border-emerald-500/20"
                           : tx.status === "FAILED"
-                            ? "bg-red-500/10 text-red-400 border border-red-500/20"
-                            : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                            ? "bg-red-500/10 text-danger border border-red-500/20"
+                            : "bg-amber-500/10 text-warn border border-amber-500/20"
                       }`}>
                         {tx.status}
                       </span>
                     </td>
-                    <td className="px-4 py-3 whitespace-nowrap text-xs text-slate-500 font-mono truncate max-w-[140px]" title={tx.reference_number || ""}>
+                    <td className="px-4 py-3 whitespace-nowrap text-xs text-ink-subtle font-mono truncate max-w-[140px]" title={tx.reference_number || ""}>
                       {tx.reference_number || "—"}
                     </td>
                   </tr>
                 ))}
                 {visibleTxs.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-12 text-center text-slate-600">
+                    <td colSpan={6} className="px-4 py-12 text-center text-ink-subtle">
                       No transactions match your search.
                     </td>
                   </tr>
@@ -561,22 +562,22 @@ export default function UserProfile() {
 
           {/* Pagination */}
           {totalPages > 1 && (
-            <div className="p-4 border-t border-slate-800 flex items-center justify-between">
-              <span className="text-xs text-slate-500">
+            <div className="p-4 border-t border-line flex items-center justify-between">
+              <span className="text-xs text-ink-subtle">
                 Page {txPage + 1} of {totalPages}
               </span>
               <div className="flex gap-2">
                 <button
                   onClick={() => setTxPage(p => Math.max(0, p - 1))}
                   disabled={txPage === 0}
-                  className="px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 rounded-lg transition"
+                  className="px-3 py-1.5 text-xs font-medium bg-raised hover:bg-raised disabled:opacity-40 disabled:cursor-not-allowed text-ink-muted rounded-lg transition"
                 >
                   Previous
                 </button>
                 <button
                   onClick={() => setTxPage(p => Math.min(totalPages - 1, p + 1))}
                   disabled={txPage >= totalPages - 1}
-                  className="px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 rounded-lg transition"
+                  className="px-3 py-1.5 text-xs font-medium bg-raised hover:bg-raised disabled:opacity-40 disabled:cursor-not-allowed text-ink-muted rounded-lg transition"
                 >
                   Next
                 </button>

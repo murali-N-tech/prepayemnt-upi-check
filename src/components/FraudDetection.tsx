@@ -49,52 +49,52 @@ export default function FraudDetection() {
   return (
     <div className="space-y-8 animate-fade-in" id="fraud-detection-container">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight text-white mb-2">Transaction Risk Analysis</h1>
-        <p className="text-slate-400">
+        <h1 className="text-3xl font-bold tracking-tight text-ink mb-2">Transaction Risk Analysis</h1>
+        <p className="text-ink-muted">
           Run high-velocity machine learning transaction scoring models combined with behavioral heuristic rules.
         </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Input Parameters Form */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 h-fit" id="risk-analysis-form">
-          <h2 className="text-xl font-semibold text-white mb-4">Analyze Transaction</h2>
+        <div className="bg-surface border border-line rounded-xl p-6 h-fit" id="risk-analysis-form">
+          <h2 className="text-xl font-semibold text-ink mb-4">Analyze Transaction</h2>
 
           <form onSubmit={handleAnalyze} className="space-y-5">
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">Merchant / Payee</label>
+              <label className="block text-sm font-medium text-ink-muted mb-1">Merchant / Payee</label>
               <input
                 type="text"
                 value={merchant}
                 onChange={(e) => setMerchant(e.target.value)}
                 placeholder="e.g. Swiggy"
                 required
-                className="w-full px-4 py-2 bg-slate-950 border border-slate-800 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-4 py-2 bg-inset border border-line rounded-lg text-ink placeholder-ink-subtle focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">Amount (INR)</label>
+              <label className="block text-sm font-medium text-ink-muted mb-1">Amount (INR)</label>
               <input
                 type="number"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 placeholder="₹ Amount"
                 required
-                className="w-full px-4 py-2 bg-slate-950 border border-slate-800 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-4 py-2 bg-inset border border-line rounded-lg text-ink placeholder-ink-subtle focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
 
             {/* Sliders for advanced biometric metrics */}
-            <div className="pt-4 border-t border-slate-800 space-y-4">
-              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+            <div className="pt-4 border-t border-line space-y-4">
+              <h3 className="text-xs font-semibold text-ink-muted uppercase tracking-wider flex items-center gap-1.5">
                 <Sliders className="h-3.5 w-3.5" /> Biometrics & Device Scores
               </h3>
 
               <div>
-                <div className="flex justify-between text-xs text-slate-400 mb-1">
+                <div className="flex justify-between text-xs text-ink-muted mb-1">
                   <span>Device Trust Score</span>
-                  <span className="text-white font-semibold">{deviceScore.toFixed(2)}</span>
+                  <span className="text-ink font-semibold">{deviceScore.toFixed(2)}</span>
                 </div>
                 <input
                   type="range"
@@ -108,9 +108,9 @@ export default function FraudDetection() {
               </div>
 
               <div>
-                <div className="flex justify-between text-xs text-slate-400 mb-1">
+                <div className="flex justify-between text-xs text-ink-muted mb-1">
                   <span>Geographic Location Score</span>
-                  <span className="text-white font-semibold">{locationScore.toFixed(2)}</span>
+                  <span className="text-ink font-semibold">{locationScore.toFixed(2)}</span>
                 </div>
                 <input
                   type="range"
@@ -124,9 +124,9 @@ export default function FraudDetection() {
               </div>
 
               <div>
-                <div className="flex justify-between text-xs text-slate-400 mb-1">
+                <div className="flex justify-between text-xs text-ink-muted mb-1">
                   <span>Velocity count (Same Hour)</span>
-                  <span className="text-white font-semibold">{velocityScore} txs</span>
+                  <span className="text-ink font-semibold">{velocityScore} txs</span>
                 </div>
                 <input
                   type="range"
@@ -141,7 +141,7 @@ export default function FraudDetection() {
             </div>
 
             {error && (
-              <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-sm rounded-lg p-3">
+              <div className="bg-red-500/10 border border-red-500/20 text-danger text-sm rounded-lg p-3">
                 {error}
               </div>
             )}
@@ -169,22 +169,22 @@ export default function FraudDetection() {
             <div className="space-y-6 animate-fade-in" id="analysis-result">
               {/* Core Risk Metrics */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 text-center">
-                  <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">Risk Score</span>
-                  <span className="text-6xl font-black text-white block mt-2">{result.risk_score}</span>
-                  <span className="text-xs text-slate-500 block mt-2">out of 100</span>
+                <div className="bg-surface border border-line rounded-xl p-6 text-center">
+                  <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider block">Risk Score</span>
+                  <span className="text-6xl font-black text-ink block mt-2">{result.risk_score}</span>
+                  <span className="text-xs text-ink-subtle block mt-2">out of 100</span>
                 </div>
 
                 <div className={`border rounded-xl p-6 flex flex-col justify-center items-center ${
                   result.risk === 1
-                    ? "bg-rose-500/10 border-rose-500/20 text-rose-400"
-                    : "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                    ? "bg-rose-500/10 border-rose-500/20 text-danger"
+                    : "bg-emerald-500/10 border-emerald-500/20 text-ok"
                 }`}>
-                  <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">Decision Result</span>
-                  <span className="text-3xl font-extrabold text-white block mt-2">
+                  <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider block">Decision Result</span>
+                  <span className="text-3xl font-extrabold text-ink block mt-2">
                     {result.risk === 1 ? "BLOCKED / FRAUD" : "APPROVED"}
                   </span>
-                  <span className="text-xs text-slate-300 text-center block mt-2 max-w-xs">
+                  <span className="text-xs text-ink-muted text-center block mt-2 max-w-xs">
                     {result.risk === 1 
                       ? "Transaction flagged as HIGH probability of malicious behaviour." 
                       : "Transaction conforms to standard UPI security guidelines."}
@@ -193,55 +193,55 @@ export default function FraudDetection() {
               </div>
 
               {/* Transaction Receipt Details */}
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 text-sm text-slate-300">
-                <h3 className="font-semibold text-white mb-3">Transaction Details</h3>
+              <div className="bg-surface border border-line rounded-xl p-5 text-sm text-ink-muted">
+                <h3 className="font-semibold text-ink mb-3">Transaction Details</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs">
                   <div>
-                    <span className="text-slate-500 block">TRANSACTION ID</span>
-                    <span className="text-white font-semibold">{result.transaction_id}</span>
+                    <span className="text-ink-subtle block">TRANSACTION ID</span>
+                    <span className="text-ink font-semibold">{result.transaction_id}</span>
                   </div>
                   <div>
-                    <span className="text-slate-500 block">SENDER</span>
-                    <span className="text-white font-semibold">{username}</span>
+                    <span className="text-ink-subtle block">SENDER</span>
+                    <span className="text-ink font-semibold">{username}</span>
                   </div>
                   <div>
-                    <span className="text-slate-500 block">RECEIVER</span>
-                    <span className="text-white font-semibold">{merchant}</span>
+                    <span className="text-ink-subtle block">RECEIVER</span>
+                    <span className="text-ink font-semibold">{merchant}</span>
                   </div>
                   <div>
-                    <span className="text-slate-500 block">AMOUNT (INR)</span>
-                    <span className="text-white font-semibold">₹{amount}</span>
+                    <span className="text-ink-subtle block">AMOUNT (INR)</span>
+                    <span className="text-ink font-semibold">₹{amount}</span>
                   </div>
                 </div>
               </div>
 
               {/* Personalized Assessment Result */}
               {result.personalized_assessment ? (
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
-                  <h3 className="text-lg font-bold text-white flex items-center gap-2 border-b border-slate-800 pb-3">
-                    <ShieldCheck className="h-5 w-5 text-indigo-400" />
+                <div className="bg-surface border border-line rounded-xl p-6 space-y-4">
+                  <h3 className="text-lg font-bold text-ink flex items-center gap-2 border-b border-line pb-3">
+                    <ShieldCheck className="h-5 w-5 text-brand" />
                     Personalized Behaviour Assessment
                   </h3>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="p-4 bg-slate-950 rounded-lg">
-                      <span className="text-xs text-slate-500 block">Behavior Score</span>
-                      <span className="text-2xl font-bold text-white mt-1">{result.personalized_assessment.risk_score}</span>
+                    <div className="p-4 bg-inset rounded-lg">
+                      <span className="text-xs text-ink-subtle block">Behavior Score</span>
+                      <span className="text-2xl font-bold text-ink mt-1">{result.personalized_assessment.risk_score}</span>
                     </div>
 
-                    <div className="p-4 bg-slate-950 rounded-lg">
-                      <span className="text-xs text-slate-500 block">Behavior Level</span>
+                    <div className="p-4 bg-inset rounded-lg">
+                      <span className="text-xs text-ink-subtle block">Behavior Level</span>
                       <span className={`text-2xl font-bold mt-1 ${
-                        result.personalized_assessment.risk_level === "HIGH" ? "text-rose-400" : "text-emerald-400"
+                        result.personalized_assessment.risk_level === "HIGH" ? "text-danger" : "text-ok"
                       }`}>{result.personalized_assessment.risk_level}</span>
                     </div>
                   </div>
 
                   <div>
-                    <span className="text-xs font-semibold text-slate-400 block mb-2">Behavior Anomalies</span>
+                    <span className="text-xs font-semibold text-ink-muted block mb-2">Behavior Anomalies</span>
                     <ul className="space-y-2">
                       {result.personalized_assessment.reasons.map((r: string, idx: number) => (
-                        <li key={idx} className="text-sm text-slate-300 bg-slate-950/50 p-2.5 rounded border border-slate-900/50">
+                        <li key={idx} className="text-sm text-ink-muted bg-inset/50 p-2.5 rounded border border-line/50">
                           • {r}
                         </li>
                       ))}
@@ -249,20 +249,20 @@ export default function FraudDetection() {
                   </div>
                 </div>
               ) : (
-                <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-5 text-center">
-                  <span className="text-xs text-slate-400 block mb-1">Personalized Behavioral Check Not Executed</span>
-                  <p className="text-xs text-slate-500 max-w-md mx-auto">
+                <div className="bg-surface/50 border border-line rounded-xl p-5 text-center">
+                  <span className="text-xs text-ink-muted block mb-1">Personalized Behavioral Check Not Executed</span>
+                  <p className="text-xs text-ink-subtle max-w-md mx-auto">
                     To activate personalized checks, upload a statement on the{" "}
-                    <strong className="text-slate-300">Upload Statement</strong> page.
+                    <strong className="text-ink-muted">Upload Statement</strong> page.
                   </p>
                 </div>
               )}
             </div>
           ) : (
-            <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-12 text-center h-full flex flex-col justify-center items-center">
-              <Cpu className="h-16 w-16 text-slate-700 mb-4" />
-              <h3 className="text-lg font-semibold text-white mb-1">Risk Predictor</h3>
-              <p className="text-slate-400 max-w-md text-sm">
+            <div className="bg-surface/40 border border-line rounded-xl p-12 text-center h-full flex flex-col justify-center items-center">
+              <Cpu className="h-16 w-16 text-ink-faint mb-4" />
+              <h3 className="text-lg font-semibold text-ink mb-1">Risk Predictor</h3>
+              <p className="text-ink-muted max-w-md text-sm">
                 Submit a UPI transaction to feed the real-time scoring model and check risk probabilities.
               </p>
             </div>

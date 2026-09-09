@@ -1,29 +1,191 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
-@theme {
+/* The theme is driven by a `dark` class on <html>, set by ThemeContext, so a
+   user's explicit choice wins over the OS setting. Without this the `dark:`
+   variant would follow prefers-color-scheme only and the toggle would do
+   nothing. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Semantic colour tokens.
+
+   Components name the ROLE a colour plays - surface, line, ink, danger - and
+   never the shade. That is what makes one set of components render correctly
+   in both themes: only the two blocks below change, and every screen follows.
+
+   Roles, from back to front:
+     canvas   the page itself
+     surface  a card sitting on the page
+     raised   a control or chip sitting on a card (also hover)
+     inset    an input or an inner panel, recessed into a card
+   ─────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  color-scheme: light;
+
+  --canvas: #f4f6fa;
+  --surface: #ffffff;
+  --raised: #eef1f7;
+  --inset: #f8fafc;
+
+  --line: #e3e8ef;
+  --line-strong: #cbd5e1;
+
+  --ink: #0b1220;
+  --ink-muted: #4a586b;
+  --ink-subtle: #6b7a90;
+  --ink-faint: #c2cbd8;
+
+  --brand: #4f46e5;
+  /* The fill behind white button text. Fixed across themes on purpose: a
+     solid button carries its own background, so it must not follow the page
+     or the label loses contrast on one side. */
+  --brand-ink: #4f46e5;
+  --danger: #dc2626;
+  --warn: #b45309;
+  --ok: #047857;
+
+  --ring: #6366f1;
+  --shadow-color: 220 40% 20%;
+  --shadow-strength: 0.06;
+}
+
+.dark {
+  color-scheme: dark;
+
+  --canvas: #060a14;
+  --surface: #0f172a;
+  --raised: #1e293b;
+  --inset: #0b1220;
+
+  --line: #1e293b;
+  --line-strong: #334155;
+
+  --ink: #f8fafc;
+  --ink-muted: #94a3b8;
+  --ink-subtle: #64748b;
+  --ink-faint: #334155;
+
+  --brand: #818cf8;
+  --brand-ink: #4f46e5;
+  --danger: #fb7185;
+  --warn: #fbbf24;
+  --ok: #34d399;
+
+  --ring: #6366f1;
+  --shadow-color: 220 60% 2%;
+  --shadow-strength: 0.5;
+}
+
+@theme inline {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  --animate-fade-in: fade-in 0.4s ease-out;
+
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-inset: var(--inset);
+
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-subtle: var(--ink-subtle);
+  --color-ink-faint: var(--ink-faint);
+
+  --color-brand: var(--brand);
+  --color-brand-ink: var(--brand-ink);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-ok: var(--ok);
+
+  --animate-fade-in: fade-in 0.35s ease-out both;
+  --animate-rise: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 @keyframes fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+html {
+  background-color: var(--canvas);
 }
 
 body {
   font-family: var(--font-sans);
-  background-color: #0f172a;
-  color: #f8fafc;
+  background-color: var(--canvas);
+  color: var(--ink);
   margin: 0;
   padding: 0;
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
+/* One shadow scale, tinted by theme, so cards read as lifted in light mode
+   and as merely separated in dark mode where a drop shadow is invisible. */
+.shadow-card {
+  box-shadow:
+    0 1px 2px hsl(var(--shadow-color) / var(--shadow-strength)),
+    0 4px 12px -4px hsl(var(--shadow-color) / calc(var(--shadow-strength) * 0.8));
+}
+
+.shadow-lift {
+  box-shadow:
+    0 2px 4px hsl(var(--shadow-color) / var(--shadow-strength)),
+    0 12px 28px -8px hsl(var(--shadow-color) / calc(var(--shadow-strength) * 1.1));
+}
+
+/* Focus is drawn once, here, so every control agrees. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--ring) 30%, transparent);
+}
+
+/* Scrollbars follow the theme instead of staying stuck in one of them. */
+* {
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 999px;
+  border: 3px solid var(--canvas);
+}
+
+/* The faint grid behind the landing hero. Drawn in CSS so no image is needed
+   and it re-tints with the theme. */
+.hero-grid {
+  background-image:
+    linear-gradient(to right, var(--line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
