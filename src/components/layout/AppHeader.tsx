@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
-import { BadgeCheck, ChevronDown, LogOut, Menu, ShieldQuestion } from "lucide-react";
+import { BadgeCheck, ChevronDown, LogOut, Menu, Server, ShieldQuestion } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useHealth } from "../../lib/useHealth";
 import { navItem, type PageID } from "./nav";
 import { Wordmark } from "../ui/Logo";
 import { ThemeToggle } from "../ui/ThemeToggle";
+import BackendSettingsModal from "../BackendSettingsModal";
+import { getStoredBackendUrl, isCapacitorNative } from "../../services/apiConfig";
 
 interface AppHeaderProps {
   activePage: PageID;
@@ -41,6 +43,7 @@ const StatusPill: React.FC = () => {
 export const AppHeader: React.FC<AppHeaderProps> = ({ activePage, onOpenMenu }) => {
   const { username, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const current = navItem(activePage);
 
@@ -146,6 +149,26 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ activePage, onOpenMenu }) 
 
               <button
                 role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setSettingsOpen(true);
+                }}
+                className="w-full flex items-start gap-2 px-3 py-2 rounded-lg text-sm text-ink-muted hover:text-ink hover:bg-raised transition text-left"
+              >
+                <Server className="h-4 w-4 mt-0.5 shrink-0" />
+                <span className="min-w-0">
+                  Backend server
+                  <span className="block text-[11px] text-ink-subtle truncate">
+                    {getStoredBackendUrl() ||
+                      (isCapacitorNative() ? "not set" : "this site")}
+                  </span>
+                </span>
+              </button>
+
+              <div className="my-1 h-px bg-line" />
+
+              <button
+                role="menuitem"
                 onClick={logout}
                 className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-ink-muted hover:text-ink hover:bg-raised transition"
               >
@@ -156,6 +179,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ activePage, onOpenMenu }) 
           )}
         </div>
       </div>
+
+      <BackendSettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </header>
   );
 };

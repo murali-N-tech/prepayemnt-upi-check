@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { useAuth } from "../../context/AuthContext";
 import { UpiStatusNote, useUpiStatus } from "./UpiStatusNote";
 import { AuthShell, fieldClass, labelClass, submitClass } from "./AuthShell";
+import { getApiUrl } from "../../services/apiConfig";
 
 /** Same shape the server enforces, so the obvious mistakes are caught here. */
 const VPA_PATTERN = /^[a-z0-9.\-_]{2,256}@[a-z][a-z0-9.\-_]{1,63}$/;
@@ -37,7 +38,7 @@ export const Register: React.FC<{
 
     setLoading(true);
     try {
-      const response = await fetch("/api/auth/register", {
+      const response = await fetch(getApiUrl("/api/auth/register"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: normalised, password }),

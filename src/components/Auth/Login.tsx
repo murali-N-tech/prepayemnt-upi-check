@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
 import { AuthShell, fieldClass, labelClass, submitClass } from "./AuthShell";
+import { getApiUrl } from "../../services/apiConfig";
 
 export const Login: React.FC<{
   onSwitchToRegister: () => void;
@@ -18,7 +19,7 @@ export const Login: React.FC<{
     setLoading(true);
 
     try {
-      const response = await fetch("/api/auth/login", {
+      const response = await fetch(getApiUrl("/api/auth/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // The server identifies accounts by UPI ID; `username` is the wire

@@ -1,3 +1,5 @@
+import { getApiUrl } from "../services/apiConfig";
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -22,7 +24,9 @@ export function createApi(token: string | null, onUnauthorized: () => void): Api
       headers.set("Content-Type", "application/json");
     }
 
-    const res = await fetch(path, { ...init, headers });
+    // Relative in the browser (Vite proxy in dev, Vercel rewrite in prod),
+    // absolute in the Android build where there is no same-origin server.
+    const res = await fetch(getApiUrl(path), { ...init, headers });
 
     if (res.status === 401) {
       onUnauthorized();

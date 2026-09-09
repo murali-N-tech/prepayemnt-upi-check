@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { getApiUrl } from "../../services/apiConfig";
 
 export interface UpiStatus {
   provider_configured: boolean;
@@ -18,7 +19,7 @@ export function useUpiStatus(): UpiStatus | null {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/auth/upi-status")
+    fetch(getApiUrl("/api/auth/upi-status"))
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (!cancelled && data) setStatus(data);

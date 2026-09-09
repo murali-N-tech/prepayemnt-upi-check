@@ -8,10 +8,14 @@
     "dev:api": "python backend/main.py",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
-    "start": "vite preview"
+    "start": "vite preview",
+    "cap:sync": "cap sync",
+    "cap:build": "npm run build && cap sync",
+    "cap:open:android": "cap open android"
   },
   "dependencies": {
-    "bcryptjs": "^2.4.3",
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
     "express": "^4.19.2",
     "form-data": "^4.0.6",
     "lucide-react": "^0.395.0",
@@ -23,8 +27,8 @@
     "recharts": "^2.12.7"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
     "@tailwindcss/vite": "^4.0.0",
-    "@types/bcryptjs": "^2.4.6",
     "@types/express": "^4.17.21",
     "@types/multer": "^1.4.11",
     "@types/react": "^18.3.3",

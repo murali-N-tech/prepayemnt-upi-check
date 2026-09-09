@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getApiUrl } from "../services/apiConfig";
 
 export interface Health {
   status: "ok" | "degraded";
@@ -23,7 +24,7 @@ export function useHealth(intervalMs = 30_000): Health | null {
 
     const poll = async () => {
       try {
-        const res = await fetch("/api/health");
+        const res = await fetch(getApiUrl("/api/health"));
         const body = (await res.json()) as Health;
         if (!cancelled) setHealth(body);
       } catch {
