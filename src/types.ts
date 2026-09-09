@@ -14,12 +14,15 @@ export interface Transaction {
 export interface BehaviorProfile {
   user_id: string;
   transaction_count: number;
+  debit_count?: number;
+  credit_count?: number;
   avg_amount: number;
   max_amount: number;
   min_amount: number;
   most_active_hour: number | null;
   night_transactions: number;
   weekend_transactions: number;
+  transactions_without_time?: number;
   favorite_merchants: string[];
   average_daily_transactions: number;
   failed_transactions: number;
@@ -49,6 +52,14 @@ export interface PersonalizedAssessment {
   location: string | null;
 }
 
+export interface StatementTransactionsPage {
+  total: number;
+  limit: number;
+  offset: number;
+  truncated: boolean;
+  transactions: StatementTransaction[];
+}
+
 export interface StatementTransaction {
   statement_id: string;
   user_id: string;
@@ -60,5 +71,60 @@ export interface StatementTransaction {
   reference_number?: string;
   source_type: string;
   raw_line: string;
+  txn_type?: string;
   created_at: string;
+}
+
+export interface PayeeFinding {
+  code: string;
+  severity: "info" | "warn" | "high" | "critical";
+  message: string;
+}
+
+export interface PayeeReputation {
+  vpa: string;
+  known: boolean;
+  display_name: string | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  age_days: number | null;
+  payment_count: number;
+  distinct_payers: number;
+  repeat_payers: number;
+  total_amount: number;
+  mean_amount: number | null;
+  amount_spread: number | null;
+  reports: number;
+  blocked: boolean;
+}
+
+export interface PayeeCheckResult {
+  input: string;
+  input_kind: string;
+  payee: {
+    vpa: string | null;
+    key: string;
+    display_name: string | null;
+    valid: boolean;
+    handle_type: string;
+    impersonates: string | null;
+  };
+  request: {
+    amount: number | null;
+    amount_locked: boolean;
+    note: string | null;
+    merchant_code: string | null;
+    signed: boolean;
+  };
+  reputation: PayeeReputation | null;
+  risk_score: number;
+  decision: "APPROVE" | "WARN" | "STEP_UP" | "BLOCK";
+  headline: string;
+  component_scores: {
+    address_and_qr: number;
+    payee_history: number;
+    amount_context: number;
+  };
+  findings: PayeeFinding[];
+  payer_behaviour: PersonalizedAssessment | null;
 }

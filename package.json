@@ -3,11 +3,15 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
-    "build": "vite build",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "tsx watch --ignore \"vite.config.ts.timestamp-*\" --ignore \"./data/**\" --ignore \"./models/**\" --ignore \"./dist/**\" --ignore \"./archive/**\" --ignore \"**/__pycache__/**\" --ignore \"*.db\" --ignore \"*.db-journal\" server.ts",
+    "dev:api": "python backend/main.py",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
     "start": "vite preview"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "express": "^4.19.2",
     "form-data": "^4.0.6",
     "lucide-react": "^0.395.0",
@@ -20,6 +24,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
+    "@types/bcryptjs": "^2.4.6",
     "@types/express": "^4.17.21",
     "@types/multer": "^1.4.11",
     "@types/react": "^18.3.3",

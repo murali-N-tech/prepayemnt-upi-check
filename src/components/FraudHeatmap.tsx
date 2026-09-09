@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ZAxis, Cell } from "recharts";
 import { AlertTriangle, Info } from "lucide-react";
+import { useAuth } from "../context/AuthContext";
 
 interface HeatmapPoint {
   amount: number;
@@ -9,6 +10,7 @@ interface HeatmapPoint {
 }
 
 export default function FraudHeatmap() {
+  const { api } = useAuth();
   const [dataPoints, setDataPoints] = useState<HeatmapPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -18,18 +20,17 @@ export default function FraudHeatmap() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch("/api/heatmap");
-        if (!res.ok) {
-          throw new Error("Unable to fetch risk coordinate logs");
-        }
-        const data = await res.json();
+        const data = await api<{ error?: string; amount?: number[]; risk?: number[] }>(
+          "/api/heatmap"
+        );
+        const risk = data.risk;
         if (data.error) {
           setError(data.error);
-        } else if (data.amount && data.risk) {
+        } else if (data.amount && risk) {
           const points: HeatmapPoint[] = data.amount.map((amount: number, idx: number) => ({
             amount,
-            riskScore: Math.floor(Math.random() * 20) + (data.risk[idx] === 1 ? 75 : 15), // recreate risk score spread
-            riskLevel: data.risk[idx],
+            riskScore: Math.floor(Math.random() * 20) + (risk[idx] === 1 ? 75 : 15), // recreate risk score spread
+            riskLevel: risk[idx],
           }));
           setDataPoints(points);
         }

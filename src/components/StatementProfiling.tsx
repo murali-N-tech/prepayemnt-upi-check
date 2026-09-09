@@ -7,7 +7,7 @@ interface StatementProfilingProps {
 }
 
 export default function StatementProfiling({ onNavigate }: StatementProfilingProps) {
-  const { userId, token } = useAuth();
+  const { api, token } = useAuth();
   const [retainSource, setRetainSource] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
@@ -42,8 +42,8 @@ export default function StatementProfiling({ onNavigate }: StatementProfilingPro
 
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userId) {
-      setError("User session invalid. Please log in.");
+    if (!token) {
+      setError("Your session has expired. Please sign in again.");
       return;
     }
     if (!file) {
@@ -56,32 +56,19 @@ export default function StatementProfiling({ onNavigate }: StatementProfilingPro
     setSuccess(false);
     setWarnings([]);
 
+    // No user_id: the server takes the owner from the auth token.
     const formData = new FormData();
-    formData.append("user_id", userId);
     formData.append("retain_source", String(retainSource));
     formData.append("file", file);
 
     try {
-      const res = await fetch("/api/statement/upload", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${token}`
-        },
-        body: formData,
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        let detail = text;
-        try {
-          const json = JSON.parse(text);
-          detail = json.details || json.detail || json.error || text;
-        } catch {}
-        throw new Error(detail || "Upload failed");
-      }
-
-      const result = await res.json();
-      if (result.profile || result.transactions_extracted > 0) {
+      const result = await api<{
+        profile?: unknown;
+        transactions_extracted?: number;
+        source_type?: string;
+        warnings?: string[];
+      }>("/api/statement/upload", { method: "POST", body: formData });
+      if (result.profile || (result.transactions_extracted ?? 0) > 0) {
         setSuccess(true);
         setExtractedCount(result.transactions_extracted || 0);
         setSourceType(result.source_type || "");

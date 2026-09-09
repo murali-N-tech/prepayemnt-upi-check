@@ -1,13 +1,14 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { 
-  FileText, ShieldCheck, Cpu, Share2, AlertTriangle, 
-  LineChart, Eye, Bell, Activity, Shield, Menu, X, LogOut, User 
+  FileText, ShieldCheck, Cpu, Share2, AlertTriangle,
+  LineChart, Eye, Bell, Activity, Shield, Menu, X, LogOut, User, ScanLine 
 } from "lucide-react";
 
 import { useAuth } from "./context/AuthContext";
 import { Login } from "./components/Auth/Login";
 import { Register } from "./components/Auth/Register";
 
+import PayeeCheck from "./components/PayeeCheck.tsx";
 import StatementProfiling from "./components/StatementProfiling.tsx";
 import PrePaymentRiskCheck from "./components/PrePaymentRiskCheck.tsx";
 import FraudDetection from "./components/FraudDetection.tsx";
@@ -19,7 +20,8 @@ import FraudAlerts from "./components/FraudAlerts.tsx";
 import SystemMonitor from "./components/SystemMonitor.tsx";
 import UserProfile from "./components/UserProfile.tsx";
 
-type PageID = 
+type PageID =
+  | "Check a Payee"
   | "Upload Statement"
   | "User Profile"
   | "Pre-Payment Risk Check"
@@ -32,10 +34,18 @@ type PageID =
   | "System Monitor";
 
 export default function App() {
-  const { isAuthenticated, logout, username } = useAuth();
-  const [activePage, setActivePage] = useState<PageID>("User Profile");
+  const { isAuthenticated, isLoading, logout, username } = useAuth();
+  const [activePage, setActivePage] = useState<PageID>("Check a Payee");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showRegister, setShowRegister] = useState(false);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[#0f172a] flex items-center justify-center">
+        <div className="h-8 w-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     if (showRegister) {
@@ -45,6 +55,7 @@ export default function App() {
   }
 
   const menuItems = [
+    { id: "Check a Payee", label: "Check a Payee", icon: ScanLine },
     { id: "User Profile", label: "User Profile", icon: User },
     { id: "Upload Statement", label: "Upload Statement", icon: FileText },
     { id: "Pre-Payment Risk Check", label: "Pre-Payment Risk Check", icon: ShieldCheck },
@@ -59,6 +70,8 @@ export default function App() {
 
   const renderActivePage = () => {
     switch (activePage) {
+      case "Check a Payee":
+        return <PayeeCheck />;
       case "Upload Statement":
         return <StatementProfiling onNavigate={(page) => setActivePage(page as PageID)} />;
       case "User Profile":

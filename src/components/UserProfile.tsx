@@ -1,21 +1,23 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  TrendingUp, TrendingDown, DollarSign, Calendar, Activity, User,
-  Clock, ArrowUpRight, ArrowDownRight, CreditCard, Search, ChevronDown, ChevronUp,
+  TrendingUp, DollarSign, Activity, User,
+  Clock, CreditCard, Search, ChevronDown, ChevronUp,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  LineChart, Line, PieChart, Pie, Cell, AreaChart, Area,
+  PieChart, Pie, Cell, AreaChart, Area,
 } from "recharts";
-import { BehaviorProfile, StatementTransaction } from "../types";
+import { BehaviorProfile, StatementTransaction, StatementTransactionsPage } from "../types";
 import { useAuth } from "../context/AuthContext";
 
 const CHART_COLORS = ["#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd", "#818cf8", "#4f46e5", "#7c3aed", "#5b21b6", "#6d28d9", "#4338ca"];
 
 export default function UserProfile() {
-  const { token, username, userId } = useAuth();
+  const { api, token, username } = useAuth();
   const [profile, setProfile] = useState<BehaviorProfile | null>(null);
   const [transactions, setTransactions] = useState<StatementTransaction[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [txSearch, setTxSearch] = useState("");
   const [txSort, setTxSort] = useState<{ key: string; dir: "asc" | "desc" }>({ key: "timestamp", dir: "desc" });
@@ -23,37 +25,31 @@ export default function UserProfile() {
   const TXS_PER_PAGE = 15;
 
   useEffect(() => {
-    if (!userId) {
+    if (!token) {
       setLoading(false);
       return;
     }
 
     const fetchData = async () => {
-      try {
-        let pRes = await fetch(`/api/profiles/${userId}`);
-        if (!pRes.ok && username && username !== userId) {
-          pRes = await fetch(`/api/profiles/${username}`);
-        }
-        if (pRes.ok) {
-          setProfile(await pRes.json());
-        }
+      // Both endpoints are scoped to the signed-in user by the token, so the
+      // component never asks for another account's data.
+      const p = await api<BehaviorProfile>("/api/profiles/me").catch(() => null);
+      if (p) setProfile(p);
 
-        let tRes = await fetch(`/api/statement-transactions/${userId}`);
-        if ((!tRes.ok || tRes.headers.get("content-type")?.includes("html")) && username && username !== userId) {
-          tRes = await fetch(`/api/statement-transactions/${username}`);
-        }
-        if (tRes.ok && !tRes.headers.get("content-type")?.includes("html")) {
-          setTransactions(await tRes.json());
-        }
-      } catch {
-        // Ignore errors
-      } finally {
-        setLoading(false);
+      const page = await api<StatementTransactionsPage>(
+        "/api/statement-transactions"
+      ).catch(() => null);
+      if (page) {
+        setTransactions(page.transactions ?? []);
+        setTotalCount(page.total ?? 0);
+        setTruncated(!!page.truncated);
       }
+
+      setLoading(false);
     };
 
     fetchData();
-  }, [userId, username, token]);
+  }, [api, token]);
 
   // ── Chart Data Helpers ──
 
@@ -146,9 +142,14 @@ export default function UserProfile() {
   };
 
   // ── Derived Stats ──
-  const totalSpent = transactions.reduce((sum, tx) => sum + (tx.amount || 0), 0);
-  const uniqueMerchants = new Set(transactions.map(tx => tx.merchant)).size;
-  const uniqueUPIs = new Set(transactions.filter(tx => tx.upi_id).map(tx => tx.upi_id)).size;
+  // Totals come from the profile where possible: the transaction list is
+  // capped, so summing it would under-report on a large statement.
+  const totalSpent = profile?.monthly_totals
+    ? Object.values(profile.monthly_totals).reduce((sum, v) => sum + v, 0)
+    : transactions.reduce((sum, tx) => sum + (tx.amount || 0), 0);
+  const uniqueMerchants = profile?.merchant_frequency
+    ? Object.keys(profile.merchant_frequency).length
+    : new Set(transactions.map(tx => tx.merchant)).size;
 
   // ── Loading State ──
 
@@ -162,7 +163,7 @@ export default function UserProfile() {
 
   // ── Empty State ──
 
-  if (!profile && transactions.length === 0) {
+  if (!profile && totalCount === 0) {
     return (
       <div className="space-y-8 animate-fade-in h-full flex flex-col" id="user-profile-container">
         <div>
@@ -189,11 +190,26 @@ export default function UserProfile() {
           Personalized payment behavior dashboard for <span className="font-semibold text-indigo-400">{username}</span>.
           {transactions.length > 0 && (
             <span className="text-slate-500 ml-2">
-              · {transactions.length} transactions extracted
+              · {totalCount} transactions extracted
+              {truncated && ` (showing the most recent ${transactions.length})`}
             </span>
           )}
         </p>
       </div>
+
+      {profile && (profile.transactions_without_time ?? 0) > 0 && (
+        <div className="bg-amber-500/10 border border-amber-500/20 text-amber-300 text-sm rounded-lg p-4 flex items-start gap-3">
+          <Clock className="h-5 w-5 shrink-0 mt-0.5" />
+          <span>
+            {profile.transactions_without_time} of {profile.transaction_count} transactions
+            in your statement carry a date but no time of day
+            {profile.most_active_hour === null || profile.most_active_hour === undefined
+              ? ", so the hourly charts and the night-time risk rule have nothing to read"
+              : ", so the hourly charts are based on the rest"}
+            . A statement that includes transaction times gives a sharper profile.
+          </span>
+        </div>
+      )}
 
       {/* ── Metrics Strip ── */}
       {profile && (
@@ -231,9 +247,15 @@ export default function UserProfile() {
               <Clock className="h-4 w-4 text-amber-400" />
             </div>
             <div className="text-2xl font-bold text-white">
-              {profile.most_active_hour !== null ? `${profile.most_active_hour}:00` : "-"}
+              {profile.most_active_hour !== null && profile.most_active_hour !== undefined
+                ? `${String(profile.most_active_hour).padStart(2, "0")}:00`
+                : "Not in statement"}
             </div>
-            <div className="text-xs text-slate-500 mt-1">Most recurring</div>
+            <div className="text-xs text-slate-500 mt-1">
+              {profile.most_active_hour !== null && profile.most_active_hour !== undefined
+                ? "Most recurring"
+                : "No transaction times to read"}
+            </div>
           </div>
 
           <div className="bg-gradient-to-br from-emerald-600/10 to-slate-900 border border-emerald-500/20 rounded-xl p-4 hidden xl:block">

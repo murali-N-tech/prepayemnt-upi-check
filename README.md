@@ -1,395 +1,319 @@
-<h1 align="center">Edge AI UPI Behavioural Risk Intelligence System</h1>
+<h1 align="center">Edge AI UPI Behaviour Risk System</h1>
 
 <p align="center">
-AI-Powered Fraud Detection Platform for Digital Payments
+A pre-payment risk check for UPI: score the payee <i>and</i> the payer before the money moves.
 </p>
 
 <p align="center">
 
 ![Python](https://img.shields.io/badge/Python-3.10-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-Backend-green)
-![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-red)
-![Machine Learning](https://img.shields.io/badge/Machine-Learning-orange)
-![Graph Analytics](https://img.shields.io/badge/Graph-NetworkX-purple)
+![React](https://img.shields.io/badge/React-18-61dafb)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.4-3178c6)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 </p>
 
 ---
 
-# Overview
+## The problem
 
-The **Edge AI UPI Behavioural Risk Intelligence System** is an advanced fraud detection platform designed to simulate how modern fintech systems monitor and prevent fraudulent transactions in real time.
+UPI apps warn you *after* the money has gone. By then the fraud is a
+complaint, not a decision. This project moves the decision to the moment
+before payment, and it does so from two directions at once:
 
-Digital payment systems such as **UPI process millions of transactions every second**, making fraud detection a critical challenge.
+- **The payer side** — is this payment unusual *for you*, judged against a
+  behaviour profile built from your own uploaded statements?
+- **The payee side** — is the address you are paying safe, judged from what
+  it looks like and what everyone else's money has done there?
 
-Traditional fraud detection systems rely on fixed rule-based logic, which struggles to detect modern attack patterns such as:
-
-• velocity attacks
-• behavioural manipulation
-• coordinated fraud rings
-• account takeover attempts
-
-This project demonstrates how **Artificial Intelligence, Behavioural Analytics, and Graph Intelligence** can be combined to build a smarter fraud detection system.
-
-Instead of relying only on predefined rules, the system analyzes **transaction behaviour patterns** and generates an intelligent fraud risk score.
-
----
-
-# Project Vision
-
-The vision behind this project is to simulate a **modern fintech fraud monitoring platform** capable of:
-
-• analysing behavioural transaction patterns
-• detecting anomalies in real time
-• identifying fraud networks using graph analytics
-• explaining AI decisions using explainable AI techniques
-
-This system illustrates how **AI-driven risk intelligence platforms** can enhance financial security and fraud prevention.
+The payee side matters because the payer side cannot see the most common
+case. A first-time victim paying a scammer ₹800 looks completely normal:
+right amount, right time of day, right device. Nothing about the *payer* is
+wrong. Everything wrong is in the *payee*.
 
 ---
 
-# Key Capabilities
+## What it does
 
-The platform demonstrates the following capabilities.
+### Check a payee (the pre-payment check)
 
-### Behavioural Risk Scoring
+Paste a UPI ID, the contents of a QR code, or a phone number.
 
-Each transaction is evaluated using behavioural signals such as:
+**Address analysis** — validates the address, checks the handle against the
+real PSP list, and detects impersonation. Look-alike detection folds
+visually similar characters on both sides of every comparison, so `sb1support`
+matches `sbi` + `support`.
 
-• transaction amount deviation
-• time between transactions
-• night transaction detection
-• transaction velocity patterns
+The brand name on its own is deliberately *not* treated as a risk:
+`swiggy@ibl` and `irctc@paytm` really are those merchants. What marks a fake
+is the brand paired with a lure word (`sbi-refund`, `hdfcbank-kyc`), a
+near-miss spelling (`icicl`), or a handle built to be misread (`okax1s`).
 
-These signals help identify abnormal user behaviour.
-
----
-
-### Machine Learning Fraud Detection
-
-The system uses anomaly detection techniques to identify suspicious transactions.
-
-Models used include:
-
-• Isolation Forest
-• Logistic Regression
-• Behavioural sequence analysis
-
-The models generate a **fraud risk score** representing the probability of fraudulent activity.
-
----
-
-### Graph Fraud Detection
-
-Fraud is often performed by **groups of accounts working together**.
-
-The system analyzes relationships between users and merchants using **graph analysis**.
-
-This enables detection of:
-
-• suspicious transaction clusters
-• circular transaction patterns
-• coordinated fraud networks
-
----
-
-### Statement-Informed Behaviour Profiling
-
-The platform can now build a **personalized behaviour profile** from uploaded UPI or bank statements.
-
-Supported workflow:
-
-• upload statement PDF or CSV
-• extract transaction features such as date, time, amount, merchant, status, and reference number
-• generate user-level behaviour profiles
-• run personalized pre-payment risk checks against historical patterns
-
-This makes the project stronger than a generic fraud classifier because risk is evaluated relative to the user's own transaction history.
-
----
-
-### Explainable AI
-
-Fraud detection models must be explainable to support investigation and compliance.
-
-The system integrates **Explainable AI techniques** to show how each feature contributes to the fraud decision.
-
-Example explanation:
+**QR payload parsing** — a UPI QR is a deep link, so its contents can be
+checked even though a person cannot read them:
 
 ```
-amount_contribution: 500
-time_gap_contribution: -0.2
-night_risk: 50
+upi://pay?pa=rakesh9911@ybl&pn=Reliance%20Digital&am=48999
+             └── who gets paid        └── what the QR displays
 ```
 
-This makes the system transparent and interpretable.
+The display name and the address do not belong to each other. That mismatch
+is the signature of a sticker pasted over a shop's real code, and it is
+invisible to the eye. The parser also rejects a QR whose scheme is not
+`upi://` and flags a `url` parameter smuggled into a payment request.
+
+**Payee reputation** — aggregates pooled across payers: when the address was
+first seen, how many distinct people have paid it, how many came back, how
+tightly the amounts cluster, and how many people reported it. This is the
+part a single wallet app cannot do. A collection account has a shape — days
+old, many unrelated payers, almost nobody pays twice — and that shape only
+appears when payers are pooled. Aggregates only; no payer can read another
+payer's transactions from it.
+
+**A four-way decision**, not a block button:
+
+| Decision | Means |
+|---|---|
+| `APPROVE` | Nothing suspicious found |
+| `WARN` | Worth a second look |
+| `STEP_UP` | Verify the payee before sending |
+| `BLOCK` | Do not pay this |
+
+The middle bands are the point. *"This payee is nine days old and 24 people
+have paid it once each — are you sure?"* is more useful than a refusal.
+
+### Statement-based behaviour profiling
+
+Upload a UPI or bank statement (PDF or CSV) to build a personal baseline:
+typical amount, usual hours, familiar merchants, known UPI IDs, daily
+velocity. A pending payment is then scored against *your* history.
+
+The PDF parser tries four extraction strategies and keeps whichever finds
+the most transactions, including a dedicated Google Pay block reader and a
+fix for statement generators that render every glyph twice.
 
 ---
 
-# System Architecture
+## Running it
 
-The architecture follows a layered structure similar to production fintech fraud detection platforms.
+Two processes. Both are needed: Express serves the UI and the behaviour
+engine, FastAPI owns PDF parsing and the payee intelligence.
 
-```
-                ┌────────────────────┐
-                │   UPI Transaction  │
-                │   User Payment     │
-                └─────────┬──────────┘
-                          │
-                          ▼
-              ┌──────────────────────┐
-              │   FastAPI Backend    │
-              │   Risk Scoring API   │
-              └─────────┬────────────┘
-                        │
-                        ▼
-        ┌─────────────────────────────────┐
-        │ Behaviour Analysis Engine       │
-        │                                 │
-        │ • Amount deviation              │
-        │ • Time gap analysis             │
-        │ • Night transaction detection   │
-        │ • Velocity attack detection     │
-        └─────────┬───────────────────────┘
-                  │
-                  ▼
-        ┌─────────────────────────────┐
-        │ Machine Learning Models     │
-        │                             │
-        │ • Isolation Forest          │
-        │ • Logistic Regression       │
-        │ • Behavioural sequence ML   │
-        └─────────┬───────────────────┘
-                  │
-                  ▼
-        ┌─────────────────────────────┐
-        │ Risk Decision Engine        │
-        │                             │
-        │ APPROVE                     │
-        │ REVIEW                      │
-        │ STEP_UP_AUTH                │
-        │ BLOCK_TRANSACTION           │
-        └─────────┬───────────────────┘
-                  │
-                  ▼
-        ┌─────────────────────────────┐
-        │ Monitoring Dashboard        │
-        │ (Streamlit)                 │
-        │                             │
-        │ • Fraud intelligence        │
-        │ • Fraud network graph       │
-        │ • Risk heatmap              │
-        │ • Fraud alerts              │
-        │ • Explainable AI            │
-        └─────────────────────────────┘
-```
-
----
-
-# Dashboard Features
-
-The Streamlit dashboard acts as a **fraud monitoring console**.
-
-It provides multiple analysis modules.
-
----
-
-# Fraud Intelligence Dashboard
-
-![Fraud Intelligence](screenshots/Screenshot%20\(536\).png)
-
-Provides an overview of transaction analytics and risk statistics.
-
----
-
-# Live Transaction Simulator
-
-![Transaction Simulator](screenshots/Screenshot%20\(538\).png)
-
-Simulates real-time transactions and evaluates fraud risk based on behavioural indicators.
-
----
-
-# Fraud Network Graph
-
-![Fraud Network Graph](screenshots/Screenshot%20\(539\).png)
-
-Visualizes relationships between users and merchants to identify suspicious transaction networks.
-
----
-
-# Fraud Rings Detection
-
-![Fraud Rings](screenshots/Screenshot%20\(540\).png)
-
-Detects clusters of interconnected accounts that may indicate coordinated fraud.
-
----
-
-# Fraud Heatmap
-
-![Fraud Heatmap](screenshots/Screenshot%20\(541\).png)
-
-Displays transaction risk distribution across simulated datasets.
-
----
-
-# Explainable AI (SHAP Analysis)
-
-![Explainable AI](screenshots/Screenshot%20\(542\).png)
-
-Provides feature importance values explaining why a transaction was flagged as suspicious.
-
----
-
-# Fraud Alerts
-
-![Fraud Alerts](screenshots/Screenshot%20\(543\).png)
-
-Displays high-risk transactions detected by the system in real time.
-
----
-
-# GNN Fraud Detection
-![GNN Fraud Detection](screenshots/Screenshot%20\(544\).png)
-The system also explores **Graph Neural Network based fraud detection techniques** to detect suspicious nodes within financial transaction networks.
-
----
-
-# Running the Project
-
-### Clone the Repository
-
-```
-git clone https://github.com/unnikrishnanavida/edge-upi-risk-intelligence.git
-cd edge-upi-risk-intelligence
-```
-
----
-
-### Install Dependencies
-
-```
+```bash
+# 1. dependencies
+npm install
 pip install -r requirements.txt
+
+# 2. configuration
+cp .env.example .env
+python -c "import secrets; print(secrets.token_hex(32))"   # paste into JWT_SECRET
+
+# 3. train the model   <-- required once, on this machine
+python backend/train_model.py
+
+# 4. run it  (starts BOTH processes)
+npm run dev                                 # http://localhost:3001
+```
+
+`npm run dev` starts the Python service on :8000 and Express + Vite on :3001,
+prefixing each one's output, and Ctrl-C stops both. To run them in separate
+terminals instead:
+
+```bash
+npm run dev:api     # python backend/main.py
+npm run dev:web     # tsx watch server.ts
+```
+
+Running only one of them is the most common way this looks broken: the page
+loads from a stale tab and every Vite asset fails with
+`ERR_CONNECTION_REFUSED`, or the payee check and PDF upload return 503. The
+server prints which state it is in on startup, and `GET /api/health` reports
+`express`, `backend` and `model` separately.
+
+**Step 3 is not optional and cannot be skipped by copying a model file from
+somewhere else.** A scikit-learn pickle is tied to the numpy and scikit-learn
+versions that produced it, so a model trained on another machine fails to load
+with an error like `PCG64 is not a known BitGenerator module`. That is why
+`models/*.pkl` is gitignored and `models/metrics.json` (the evidence) is not.
+
+`GET /api/health` reports whether the model loaded, and which versions it was
+trained with:
+
+```json
+{ "status": "ok", "backend": "ok", "model": "ready",
+  "trained_with": { "numpy": "...", "scikit-learn": "..." } }
+```
+
+If the model is missing or unloadable the API still starts — everything except
+`/predict` and `/explain` keeps working, and those return 503 with the command
+to run.
+
+Open <http://localhost:3001> and create an account. **Your UPI ID is your
+login** — `yourname@okaxis`, not a made-up username. That is deliberate: the
+payer side of every check needs to know which address the payment leaves
+from, and asking for it at sign-up is the only point where the user can say
+so without guessing.
+
+Sign-up checks two things locally and for free: the address is well formed,
+and the handle after the `@` belongs to a real PSP (so `@okaxls` is refused).
+Whether the account behind it actually exists can only be answered by the
+payment network, which needs PSP credentials this project does not ship
+with — so that is a seam, not a stub. Set `UPI_VERIFY_URL` (and optionally
+`UPI_VERIFY_KEY`, `UPI_VERIFY_REQUIRED=true`) in `.env` and registration
+verifies against your provider; leave it unset and the UI says the address
+was format-checked but not verified. Nothing anywhere reports a UPI ID as
+verified unless a provider actually said so.
+
+Existing accounts created before this change are renamed with:
+
+```bash
+python scripts/migrate_users_to_upi.py --list                  # show them
+python scripts/migrate_users_to_upi.py --map murali=murali@okaxis
+python scripts/migrate_users_to_upi.py --auto-phone            # 98…@upi
+```
+
+The **Check a Payee** page is the landing page.
+
+To seed the reputation store from statements already uploaded, and to add
+four clearly named `demo-*` addresses that exhibit the patterns the detector
+looks for:
+
+```bash
+python scripts/bootstrap_payee_reputation.py --with-demo-payees
+```
+
+### Other commands
+
+```bash
+npm run typecheck     # tsc --noEmit
+npm run build         # typecheck, then build
+pytest tests -q       # 137 tests
 ```
 
 ---
 
-### Start FastAPI Backend
+## Architecture
 
 ```
-uvicorn backend.main:app --reload
+                React SPA  (src/)
+                     │  /api/*
+                     ▼
+        ┌────────────────────────────┐
+        │  Express  server.ts :3001  │  auth · behaviour engine
+        │                            │  CSV parsing · serves the SPA
+        └──────────┬─────────────────┘
+                   │ proxies PDF upload + payee checks
+                   ▼
+        ┌────────────────────────────┐
+        │  FastAPI  backend/ :8000   │  PDF parsing
+        │                            │  VPA · QR · payee reputation
+        └──────────┬─────────────────┘
+                   ▼
+            data/behavior_profiles.db
+            statement_transactions · behavior_profiles
+            payee_reputation · payee_payers · payee_reports
 ```
 
-API endpoint
+The payee intelligence lives only in Python and Express forwards to it, so
+there is exactly one implementation of it.
 
-```
-http://127.0.0.1:8000
-```
-
-Swagger documentation
-
-```
-http://127.0.0.1:8000/docs
-```
+| Path | What is there |
+|---|---|
+| `src/` | React app |
+| `server.ts` | Express: auth, behaviour scoring, CSV parsing, SPA host |
+| `backend/app/services/vpa.py` | address validation, impersonation detection |
+| `backend/app/services/upi_qr.py` | UPI deep-link / QR parsing |
+| `backend/app/services/payee_reputation.py` | pooled payee aggregates |
+| `backend/app/services/payee_check.py` | combines them into a decision |
+| `backend/app/services/statement_parser.py` | PDF and CSV extraction |
+| `scripts/` | data repair and reputation bootstrap |
+| `tests/` | 66 tests |
+| `dashboard/` | an earlier Streamlit prototype, kept for reference |
 
 ---
 
-### Run Dashboard
+## What is a model and what is a rule
 
-```
-streamlit run dashboard/dashboard.py
-```
+Being precise about this matters more than a headline accuracy number.
 
-Dashboard
+**Rules and graph analysis** — the payee check and the personalized risk
+engine are explicit, inspectable rules with named thresholds, and every
+finding carries the reason it fired. A fraud decision the user cannot be told
+the reason for is not much use to them.
 
-```
-http://localhost:8501
-```
+**The classifier** — `backend/train_model.py` trains a calibrated model on
+`backend/ml/dataset.py` and writes `models/metrics.json`. Reproduce with:
 
----
-
-### Build a Personalized Profile
-
-1. Open the dashboard and go to `Statement Profiling`
-2. Upload a text-based PDF statement or the sample CSV file at `data/sample_upi_statement.csv`
-3. Enter a user ID and generate the behaviour profile
-4. Open `Pre-Payment Risk Check` to simulate a future payment against the stored profile
-
-Example high-risk payment scenario:
-
-• user ID: `demo_profile_user`
-• merchant: `unknown@ybl`
-• amount: `75000`
-
----
-
-# Project Structure
-
-```
-edge-upi-risk-intelligence
-│
-├ backend
-│   ├ api.py
-│   ├ app
-│   │   ├ core
-│   │   ├ services
-│
-├ dashboard
-│   └ dashboard.py
-│
-├ models
-│   ├ logistic_model.pkl
-│   └ lstm_model.pt
-│
-├ data
-│   └ risk_history.json
-│
-├ logs
-│   └ risk_engine.log
-│
-├ screenshots
-│
-├ requirements.txt
-└ README.md
+```bash
+python backend/train_model.py
 ```
 
----
+| | ROC-AUC | PR-AUC | recall @ 1% FPR | precision |
+|---|---|---|---|---|
+| Logistic regression (baseline) | 0.9514 | 0.1794 | 24% | 23% |
+| Gradient boosting (selected) | 0.9824 | 0.6206 | 68% | 45% |
 
-# Technologies Used
+ROC-AUC of 0.9824 next to PR-AUC of 0.6206 is the whole point. At a
+~1% fraud rate, accuracy and ROC-AUC flatter a model badly; a classifier that
+answers "legitimate" every time is 99% accurate and worthless. The operating
+threshold is not a round number — it is the point that satisfies a stated
+**1% false-positive budget**, because the cost of a fraud system is the good
+payments it blocks.
 
-• Python
-• FastAPI
-• Streamlit
-• Scikit-Learn
-• NetworkX
-• Pandas
-• NumPy
-• Matplotlib
+Recall by scenario at that threshold:
 
----
+| scenario | recall |
+|---|---|
+| social engineering | 58% |
+| account takeover | 73% |
+| mule collection | 80% |
+| card testing | 96% |
 
-# Real-World Applications
+**The ablation** — the project claims that scoring the payer is not enough,
+because in social engineering the payer authorised the payment themselves and
+is behaving normally by definition. That is measured rather than asserted:
 
-This system demonstrates how AI can power modern fraud detection platforms in:
+| features the model can see | social-engineering recall |
+|---|---|
+| payer's own behaviour only | 36% |
+| payee signals only | 23% |
+| both | 58% |
 
-• fintech payment gateways
-• banking transaction monitoring systems
-• digital wallet security platforms
-• financial risk intelligence engines
+Neither half is sufficient and the combination is worth more than either.
+That is the argument for the payee check, in a number.
 
----
+**The data is simulated.** There is no public labelled UPI fraud dataset.
+`backend/ml/dataset.py` generates one where labels come from the generative
+process rather than from a rule over the features — the previous script
+labelled random numbers with `amount > 80000 | rolling_txn_count > 7 |
+time_gap < 50`, so its classifier could only relearn that rule. The scenarios
+are built to overlap with honest behaviour on purpose: real people do pay new
+payees and do make large transfers, and a generator without that overlap
+produces a separable problem and a meaningless 0.99 AUC.
 
-# Future Improvements
+These figures describe the method, not field performance. To train on real
+data, produce a DataFrame with the columns in `backend/ml/dataset.FEATURES`
+plus `is_fraud` and pass it to `train()`.
 
-Potential future enhancements include:
+## Known limitations
 
-• Graph Neural Networks for fraud detection
-• Kafka real-time transaction streaming
-• PostgreSQL data warehouse
-• distributed risk scoring services
-• cloud deployment on AWS or GCP
+- The classifier is trained on simulated data (above), so its figures
+  demonstrate the method rather than field performance.
+- Account existence is not verified against the payment network unless you
+  configure a PSP endpoint (above), so a well-formed UPI ID for an account
+  that was never opened will register.
+- The reputation store is seeded from uploaded statements, so it reflects
+  this deployment's users only.
+- Phone-number payees resolve to whoever holds the number today; the check
+  says so rather than pretending otherwise.
+- Statements that give a date but no clock time are recorded as
+  time-unknown, so those rows are excluded from active-hour and night-payment
+  statistics rather than being counted at whatever placeholder the parser
+  would otherwise invent. A profile built entirely from such a statement
+  reports no active hour at all, which is the honest answer.
+- `dashboard/` and the legacy pypdf extractors are earlier work kept for
+  reference; four tests covering the latter are marked `xfail`.
 
 ---
 

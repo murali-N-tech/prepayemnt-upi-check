@@ -18,7 +18,7 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInProperties": true,
+    "noFallthroughCasesInSwitch": true,
     "esModuleInterop": true
   },
   "include": ["src", "server.ts"]

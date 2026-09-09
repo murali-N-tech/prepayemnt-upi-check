@@ -1,8 +1,9 @@
 import React, { useState } from "react";
-import { AlertTriangle, ShieldCheck, Cpu, Sliders } from "lucide-react";
+import { ShieldCheck, Cpu, Sliders } from "lucide-react";
+import { useAuth } from "../context/AuthContext";
 
 export default function FraudDetection() {
-  const [userId, setUserId] = useState("");
+  const { api, username } = useAuth();
   const [merchant, setMerchant] = useState("");
   const [amount, setAmount] = useState("");
   const [deviceScore, setDeviceScore] = useState(0.5);
@@ -14,8 +15,8 @@ export default function FraudDetection() {
 
   const handleAnalyze = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userId.trim() || !merchant.trim() || !amount) {
-      setError("Please fill out User ID, Merchant and Amount.");
+    if (!merchant.trim() || !amount) {
+      setError("Please fill out Merchant and Amount.");
       return;
     }
 
@@ -28,23 +29,15 @@ export default function FraudDetection() {
       device_score: deviceScore,
       location_score: locationScore,
       velocity_score: velocityScore,
-      sender: userId.trim(),
       receiver: merchant.trim(),
       timestamp: new Date().toISOString(),
     };
 
     try {
-      const res = await fetch("/api/predict", {
+      const data = await api<any>("/api/predict", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-
-      if (!res.ok) {
-        throw new Error("Failed to process transaction. Check server status.");
-      }
-
-      const data = await res.json();
       setResult(data);
     } catch (err: any) {
       setError(err.message || "Something went wrong.");
@@ -68,18 +61,6 @@ export default function FraudDetection() {
           <h2 className="text-xl font-semibold text-white mb-4">Analyze Transaction</h2>
 
           <form onSubmit={handleAnalyze} className="space-y-5">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">User ID</label>
-              <input
-                type="text"
-                value={userId}
-                onChange={(e) => setUserId(e.target.value)}
-                placeholder="e.g. user_1"
-                required
-                className="w-full px-4 py-2 bg-slate-950 border border-slate-800 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1">Merchant / Payee</label>
               <input
@@ -221,7 +202,7 @@ export default function FraudDetection() {
                   </div>
                   <div>
                     <span className="text-slate-500 block">SENDER</span>
-                    <span className="text-white font-semibold">{userId}</span>
+                    <span className="text-white font-semibold">{username}</span>
                   </div>
                   <div>
                     <span className="text-slate-500 block">RECEIVER</span>
@@ -271,7 +252,8 @@ export default function FraudDetection() {
                 <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-5 text-center">
                   <span className="text-xs text-slate-400 block mb-1">Personalized Behavioral Check Not Executed</span>
                   <p className="text-xs text-slate-500 max-w-md mx-auto">
-                    To activate personalized checks, upload a behavior statement in the **Statement Profiling** tab for user "{userId}".
+                    To activate personalized checks, upload a statement on the{" "}
+                    <strong className="text-slate-300">Upload Statement</strong> page.
                   </p>
                 </div>
               )}

@@ -36,8 +36,20 @@ from backend.app.services.statement_parser import (
 from backend.app.services.personalized_risk_service import (
     evaluate_personalized_risk,
 )
+from backend.app.services.fraud_graph import detect_rings, graph_summary, load_edges
+from backend.app.services.payee_check import check_payee
+from backend.app.services.upi_verify import (
+    is_configured as upi_verifier_configured,
+    verification_required as upi_verification_required,
+    verify_vpa,
+)
+from backend.app.services.payee_reputation import record_payment, report_payee
 
-from backend.app.services.behavioral_biometrics import behavior_score
+from backend.app.services.behavioral_biometrics import (
+    behavior_score,
+    behaviour_risk,
+    normalised_velocity,
+)
 from backend.app.services.temporal_gnn import temporal_patterns
 from backend.app.services.drift_monitor import detect_drift
 
@@ -53,7 +65,10 @@ from backend.graph.graph_fraud_detector import (
 )
 
 # MODEL
-from backend.models.ensemble_model import load_model
+from backend.models.ensemble_model import load_metrics, load_model
+from backend.ml.dataset import FEATURES as MODEL_FEATURES
+from backend.ml.features import build_features, to_frame
+from backend.app.services.payee_reputation import assess_payee, payee_key
 
 # GNN
 from backend.advanced_ai.gnn_fraud_detector import gnn_risk
@@ -65,19 +80,62 @@ app = FastAPI()
 # Load ML Model
 # --------------------------------------------------
 
-model = load_model()
+MODEL_METRICS = load_metrics()
+
+# The decision threshold is not a round number someone liked. It is the point
+# the training run chose to satisfy a stated false-positive budget, and it is
+# reported in models/metrics.json alongside the recall it buys.
+DECISION_THRESHOLD = float(
+    MODEL_METRICS.get("selected", {}).get("operating_point", {}).get("threshold", 0.5)
+)
+FPR_BUDGET = float(
+    MODEL_METRICS.get("selected", {}).get("operating_point", {}).get("fpr_budget", 0.01)
+)
+
+_BACKGROUND_PATH = Path("models") / "shap_background.json"
+
+# The model is loaded on first use rather than at import. A pickle is tied to
+# the library versions that produced it, so an untrained or mismatched model is
+# a normal thing to hit on a new machine - and it should not take down the
+# payee check, the statement parsing or anything else that does not need it.
+_model = None
+_explainer = None
 
 
-# --------------------------------------------------
-# SHAP Setup (FIXED)
-# --------------------------------------------------
+def get_model():
+    global _model
+    if _model is None:
+        _model = load_model()
+    return _model
 
-background_data = np.random.rand(50, 5)
 
-def shap_predict(X):
-    return model.predict_proba(X)[:, 1]
+def get_explainer():
+    """SHAP explains against a sample of real training traffic. Explaining
+    against noise, which an earlier version did, is not explanation."""
+    global _explainer
+    if _explainer is None:
+        if not _BACKGROUND_PATH.exists():
+            raise RuntimeError(
+                f"No SHAP background at {_BACKGROUND_PATH}.\n\n"
+                "    Train the model:  python backend/train_model.py"
+            )
+        background = pd.read_json(_BACKGROUND_PATH, orient="split")[MODEL_FEATURES]
 
-explainer = shap.Explainer(shap_predict, background_data)
+        def shap_predict(X):
+            frame = pd.DataFrame(X, columns=MODEL_FEATURES)
+            return get_model().predict_proba(frame)[:, 1]
+
+        _explainer = shap.Explainer(shap_predict, background.to_numpy())
+    return _explainer
+
+
+def model_or_503():
+    """Turn a missing or unloadable model into an answer the caller can act
+    on, rather than a 500 and a pickle traceback in the log."""
+    try:
+        return get_model()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 # --------------------------------------------------
@@ -97,7 +155,6 @@ class Transaction(BaseModel):
 
 class PersonalizedRiskCheck(BaseModel):
 
-    user_id: str
     amount: float
     merchant: str
     timestamp: str
@@ -107,6 +164,17 @@ class PersonalizedRiskCheck(BaseModel):
 class UserAuth(BaseModel):
     username: str
     password: str
+
+
+class PayeeCheckRequest(BaseModel):
+    """`payload` is a scanned QR, a pasted UPI ID, or a phone number."""
+    payload: str
+    amount: float | None = None
+
+
+class PayeeReportRequest(BaseModel):
+    vpa: str
+    reason: str | None = None
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
@@ -122,22 +190,62 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
 
 @app.post("/auth/register")
 def register(user: UserAuth):
+    """Accounts are identified by the UPI ID they pay from.
+
+    Using the payer's own address as the identity is what lets the rest of the
+    system line their statement up with the payee graph, instead of guessing
+    from a username that means nothing outside this app.
+    """
+    upi_id = (user.username or "").strip().lower()
+    if not upi_id or not user.password:
+        raise HTTPException(status_code=400, detail="UPI ID and password are required")
+    if len(user.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    check = verify_vpa(upi_id)
+    if check.status in {"malformed", "not_found"}:
+        raise HTTPException(status_code=400, detail=check.detail)
+    if check.status == "unavailable" and upi_verification_required():
+        raise HTTPException(
+            status_code=503,
+            detail=f"{check.detail} Registration requires verification "
+                   f"(UPI_VERIFY_REQUIRED is set), so please try again shortly.",
+        )
+
     user_id = f"usr_{uuid.uuid4().hex[:8]}"
     hashed = hash_password(user.password)
-    success = create_user(user_id, user.username, hashed)
+    success = create_user(user_id, upi_id, hashed, upi_id=upi_id, upi_verified=check.ok)
     if not success:
-        raise HTTPException(status_code=400, detail="Username already exists")
+        raise HTTPException(status_code=400, detail="That UPI ID is already registered")
+
     token = create_token(user_id)
-    return {"message": "User created", "token": token, "user_id": user_id, "username": user.username}
+    return {
+        "token": token,
+        "user_id": user_id,
+        "username": upi_id,
+        "upi_id": upi_id,
+        # Only ever true when a provider actually confirmed it.
+        "upi_verified": check.ok and check.checked_with_provider,
+        "verification": check.as_dict(),
+    }
 
 @app.post("/auth/login")
 def login(user: UserAuth):
-    db_user = get_user_by_username(user.username)
+    identifier = (user.username or "").strip().lower()
+    db_user = get_user_by_username(identifier)
     if not db_user or not verify_password(user.password, db_user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    
+        # One message for both cases, so this cannot be used to find out which
+        # UPI IDs are registered.
+        raise HTTPException(status_code=401, detail="Invalid UPI ID or password")
+
     token = create_token(db_user["id"])
-    return {"token": token, "user_id": db_user["id"], "username": db_user["username"]}
+    return {
+        "token": token,
+        "user_id": db_user["id"],
+        "username": db_user["username"],
+        "upi_id": db_user["upi_id"] or db_user["username"],
+        "upi_verified": bool(db_user["upi_verified"]),
+    }
 
 
 
@@ -150,9 +258,39 @@ def home():
     return {"message": "Edge AI UPI Behaviour Risk System Running"}
 
 
+@app.get("/auth/upi-status")
+def upi_status():
+    """Whether UPI IDs are being checked against the payment network.
+
+    The UI needs to be able to say "format checked" rather than "verified"
+    when no provider is configured.
+    """
+    return {
+        "provider_configured": upi_verifier_configured(),
+        "verification_required": upi_verification_required(),
+        "checks": ["format", "psp handle"]
+        + (["account exists"] if upi_verifier_configured() else []),
+    }
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """Reports whether the trained model is usable, so a missing or mismatched
+    one shows up here rather than at the first prediction."""
+    model_status = "ready"
+    model_detail = None
+    try:
+        get_model()
+    except RuntimeError as exc:
+        model_status = "unavailable"
+        model_detail = str(exc).splitlines()[0]
+
+    return {
+        "status": "ok",
+        "model": model_status,
+        "model_detail": model_detail,
+        "trained_with": MODEL_METRICS.get("environment"),
+    }
 
 
 # --------------------------------------------------
@@ -171,45 +309,65 @@ def predict(tx: Transaction):
 
     is_night = 1 if hour < 6 or hour > 22 else 0
 
-    df = get_all_transactions()
+    # This payer's own recent activity, not everyone's. Reading the global
+    # table meant "seconds since last transaction" was measured against a
+    # stranger's payment, which produced 0 - or a negative number - and fed
+    # the model a value it never saw in training.
+    df = get_all_transactions(sender=tx.sender, limit=50)
+
+    # No prior payment is not the same as "one second ago". Default to a long
+    # gap so an absent history does not read as a rapid-fire burst.
+    NO_PRIOR_GAP = 86_400.0
 
     if df.empty:
-
         rolling_avg_amount = tx.amount
         rolling_txn_count = 1
-        time_gap = 100
-
+        time_gap = NO_PRIOR_GAP
     else:
+        recent = df.tail(5)
+        rolling_avg_amount = float(recent["amount"].mean())
+        rolling_txn_count = int(len(recent))
 
-        rolling_avg_amount = df["amount"].tail(5).mean()
-        rolling_txn_count = len(df.tail(5))
+        time_gap = NO_PRIOR_GAP
+        last_time = pd.to_datetime(df.iloc[-1]["timestamp"], errors="coerce", utc=True)
+        now = pd.to_datetime(current_time, errors="coerce", utc=True)
+        if pd.notna(last_time) and pd.notna(now):
+            delta = (now - last_time).total_seconds()
+            # Clamp: a clock skew or an out-of-order timestamp must not become
+            # a negative gap, which reads as the strongest velocity signal there is.
+            time_gap = float(min(max(delta, 1.0), NO_PRIOR_GAP))
 
-        try:
-            last_time = pd.to_datetime(df.iloc[-1]["timestamp"])
-            time_gap = (current_time - last_time).total_seconds()
-        except:
-            time_gap = 100
+    # Payments already made today by this payer, for the velocity feature.
+    txns_today = 1
+    if not df.empty:
+        day = pd.to_datetime(df["timestamp"], errors="coerce", utc=True).dt.date
+        today = pd.to_datetime(current_time, errors="coerce", utc=True)
+        if pd.notna(today):
+            txns_today = int((day == today.date()).sum()) + 1
 
-    # ML Features
-    features = [
-        tx.amount,
-        is_night,
-        rolling_avg_amount,
-        rolling_txn_count,
-        time_gap
-    ]
+    # The model is trained on these exact features (backend/ml/features.py is
+    # the single mapping, so training and serving cannot drift apart).
+    payer_profile = get_behavior_profile(tx.sender)
+    payee = assess_payee(payee_key(tx.receiver, tx.receiver))
 
-    prob = float(model.predict_proba([features])[0][1])
+    features = build_features(
+        amount=tx.amount,
+        timestamp=tx.timestamp,
+        profile=payer_profile,
+        reputation=payee.as_dict(),
+        seconds_since_last_txn=time_gap,
+        txns_last_hour=tx.velocity_score,
+        txns_today=txns_today,
+    )
 
-    # normalize probability
-    prob = max(0.05, min(prob, 0.95))
+    prob = float(model_or_503().predict_proba(to_frame(features))[0][1])
+    risk_score = int(round(prob * 100))
+    model_flag = prob >= DECISION_THRESHOLD
 
-    risk_score = int(prob * 100)
-
-    if tx.amount > 70000 or tx.velocity_score > 7:
-        risk = 1
-    else:
-        risk = 1 if risk_score >= 70 else 0
+    # The model decides. The two hard rules stay as a floor because a very
+    # large amount or an obvious velocity spike should never be waved through
+    # on a model's say-so.
+    risk = 1 if (model_flag or tx.amount > 70000 or tx.velocity_score > 7) else 0
 
     tx_id = f"tx_{uuid.uuid4().hex[:6]}"
 
@@ -246,25 +404,14 @@ def predict(tx: Transaction):
         "transaction_id": tx_id,
         "risk": risk,
         "risk_score": risk_score,
+        "probability": round(prob, 5),
+        "threshold": round(DECISION_THRESHOLD, 5),
+        "decided_by": "model" if model_flag else ("rule" if risk else "none"),
+        "model": MODEL_METRICS.get("selected", {}).get("model"),
+        "fpr_budget": FPR_BUDGET,
+        "features": features,
         "personalized_assessment": personalized_assessment
     }
-
-
-# --------------------------------------------------
-# Transactions
-# --------------------------------------------------
-
-@app.get("/transactions")
-def transactions():
-
-    df = get_all_transactions()
-
-    if df.empty:
-        return []
-
-    df = df.fillna("")
-
-    return df.to_dict(orient="records")
 
 
 # --------------------------------------------------
@@ -297,41 +444,27 @@ def explain(tx_id: str):
     if tx is None:
         raise HTTPException(status_code=404, detail="Transaction Not Found")
 
-    df = get_all_transactions()
+    payer_profile = get_behavior_profile(tx.get("sender", ""))
+    payee = assess_payee(payee_key(tx.get("receiver", ""), tx.get("receiver", "")))
 
-    if df.empty:
-        rolling_avg = tx["amount"]
-        rolling_txn = 1
-        time_gap = 100
-        is_night = 0
-    else:
-        rolling_avg = df["amount"].tail(5).mean()
-        rolling_txn = len(df.tail(5))
-        time_gap = 100
-        is_night = 0
+    features = build_features(
+        amount=tx["amount"],
+        timestamp=tx.get("timestamp"),
+        profile=payer_profile,
+        reputation=payee.as_dict(),
+        txns_last_hour=tx.get("velocity_score", 0),
+    )
 
-    features = np.array([[
-
-        tx["amount"],
-        is_night,
-        rolling_avg,
-        rolling_txn,
-        time_gap
-
-    ]])
-
-    shap_values = explainer(features)
+    try:
+        shap_values = get_explainer()(to_frame(features).to_numpy())
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return {
         "transaction_id": tx_id,
-        "features": [
-            "amount",
-            "is_night",
-            "rolling_avg",
-            "rolling_txn_count",
-            "time_gap"
-        ],
-        "shap_values": shap_values.values.tolist()
+        "features": MODEL_FEATURES,
+        "shap_values": shap_values.values.tolist(),
+        "model": MODEL_METRICS.get("selected", {}).get("model"),
     }
 
 
@@ -340,11 +473,15 @@ def explain(tx_id: str):
 # --------------------------------------------------
 
 @app.get("/fraud-graph")
-def fraud_graph():
-
-    edges = get_graph()
-
-    return {"edges": edges}
+def fraud_graph(user: str = Depends(get_current_user)):
+    """The persisted payer -> payee graph, with payment counts on each edge."""
+    edges = load_edges()
+    return {
+        "edges": [
+            {"user": e.payer, "merchant": e.payee, "payments": e.payments}
+            for e in edges
+        ]
+    }
 
 
 # --------------------------------------------------
@@ -352,11 +489,27 @@ def fraud_graph():
 # --------------------------------------------------
 
 @app.get("/fraud-rings")
-def fraud_rings():
+def fraud_rings(user: str = Depends(get_current_user)):
+    """Addresses that share a payer pool AND show the collection shape.
 
-    rings = detect_fraud_rings()
-
-    return {"rings": rings}
+    The previous implementation walked every node in an in-memory graph and
+    reported any with three or more neighbours, so it reported payers as
+    merchants and flagged every popular shop.
+    """
+    rings = detect_rings(load_edges())
+    return {
+        "rings": [
+            {
+                "merchant": r.payees[0],
+                "payees": r.payees,
+                "users": r.shared_payers,
+                "overlap": r.overlap,
+                "total_payments": r.total_payments,
+                "reason": r.reason,
+            }
+            for r in rings
+        ]
+    }
 
 
 # --------------------------------------------------
@@ -386,14 +539,19 @@ def behavior(tx_id: str):
     if tx is None:
         raise HTTPException(status_code=404, detail="Transaction Not Found")
 
-    result = behavior_score(
-        tx["velocity_score"],
-        tx["device_score"]
-    )
+    label = behavior_score(tx["velocity_score"], tx["device_score"])
+    score = behaviour_risk(tx["velocity_score"], tx["device_score"])
 
     return {
         "transaction_id": tx_id,
-        "behavior_risk": result
+        "behavior_risk": label,
+        # The number the label came from, so the caller can see the margin
+        # rather than only which side of a threshold it fell.
+        "behavior_score": round(score, 3),
+        "components": {
+            "velocity_normalised": round(normalised_velocity(tx["velocity_score"]), 3),
+            "device_score": float(tx["device_score"]),
+        },
     }
 
 
@@ -402,7 +560,7 @@ def behavior(tx_id: str):
 # --------------------------------------------------
 
 @app.get("/model-drift")
-def model_drift():
+def model_drift(user: str = Depends(get_current_user)):
 
     df = get_all_transactions()
 
@@ -422,29 +580,54 @@ def model_drift():
 # --------------------------------------------------
 
 @app.get("/gnn-fraud-detection")
-def gnn_detection():
+def gnn_detection(user: str = Depends(get_current_user)):
+    """Graph anomalies in the payer -> payee network.
 
-    edges = get_graph()
-
-    suspicious = gnn_risk(edges)
-
-    return {"suspicious_nodes": suspicious}
+    Kept at this path so the existing UI keeps working, but this is graph
+    analysis, not a graph neural network: nothing in this repository trains
+    one. Each result carries the reason it was returned, which the old
+    degree >= 3 rule could not do (it returned the most popular merchants).
+    """
+    summary = graph_summary()
+    return {
+        "method": "bipartite graph analysis",
+        "suspicious_nodes": [d["node"] for d in summary["suspicious"]],
+        "details": summary["suspicious"],
+        "graph": {
+            "payers": summary["payers"],
+            "payees": summary["payees"],
+            "edges": summary["edges"],
+            "components": summary["components"],
+        },
+    }
 
 
 # --------------------------------------------------
 # Statement Profiling
 # --------------------------------------------------
 
+# One upload previously inserted 250,000 rows and grew the database to
+# 147 MB. Cap both the file and the row count.
+MAX_STATEMENT_BYTES = 10 * 1024 * 1024
+MAX_STATEMENT_ROWS = 20_000
+
 @app.post("/statement/upload")
 async def upload_statement(
-    user_id: str = Form(...),
     file: UploadFile = File(...),
     retain_source: bool = Form(False),
+    user_id: str = Depends(get_current_user),
 ):
+    """The statement belongs to whoever uploaded it. A user_id in the form body
+    is ignored so one account cannot write into another's history."""
 
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
+    if len(content) > MAX_STATEMENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Statement exceeds the {MAX_STATEMENT_BYTES // (1024 * 1024)} MB limit",
+        )
 
     try:
         parsed = parse_statement_file(file.filename or "statement.pdf", content)
@@ -453,7 +636,11 @@ async def upload_statement(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Statement parsing failed: {exc}") from exc
 
-    transactions = parsed["transactions"]
+    transactions = parsed["transactions"][:MAX_STATEMENT_ROWS]
+    if len(parsed["transactions"]) > MAX_STATEMENT_ROWS:
+        parsed["warnings"].append(
+            f"Statement truncated to the first {MAX_STATEMENT_ROWS} transactions."
+        )
     if not transactions:
         return {
             "user_id": user_id,
@@ -507,11 +694,43 @@ def get_my_profile(user: str = Depends(get_current_user)):
     return profile
 
 
-@app.post("/personalized-risk-check")
-def personalized_risk_check(payload: PersonalizedRiskCheck):
+MAX_STATEMENT_PAGE = 2000
 
-    profile = get_behavior_profile(payload.user_id)
-    history = get_user_transactions(payload.user_id)
+
+@app.get("/statement-transactions")
+def statement_transactions(
+    limit: int = MAX_STATEMENT_PAGE,
+    offset: int = 0,
+    user: str = Depends(get_current_user),
+):
+    """The signed-in user's statement lines, paged.
+
+    Capped because a large statement previously went to the browser in one
+    response and the profile page had to paginate a quarter of a million rows
+    in JavaScript.
+    """
+    limit = max(1, min(int(limit or MAX_STATEMENT_PAGE), MAX_STATEMENT_PAGE))
+    offset = max(0, int(offset or 0))
+
+    df = get_user_transactions(user)
+    total = int(len(df))
+    page = df.iloc[offset:offset + limit].fillna("")
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "truncated": total > offset + limit,
+        "transactions": page.to_dict(orient="records"),
+    }
+
+
+@app.post("/personalized-risk-check")
+def personalized_risk_check(
+    payload: PersonalizedRiskCheck, user: str = Depends(get_current_user)
+):
+    profile = get_behavior_profile(user)
+    history = get_user_transactions(user)
 
     result = evaluate_personalized_risk(
         profile=profile,
@@ -524,34 +743,9 @@ def personalized_risk_check(payload: PersonalizedRiskCheck):
     )
 
     return {
-        "user_id": payload.user_id,
+        "user_id": user,
         **result,
     }
-
-@app.get("/fraud-graph")
-def get_fraud_graph(user: str = Depends(get_current_user)):
-    edges = get_all_edges()
-    return {"edges": edges}
-
-@app.get("/gnn-fraud-detection")
-def get_gnn_fraud_detection(user: str = Depends(get_current_user)):
-    edges = get_all_edges()
-    # Simple logic: merchants with > 3 connections are suspicious
-    merchant_counts = {}
-    for edge in edges:
-        m = edge["merchant"]
-        merchant_counts[m] = merchant_counts.get(m, 0) + 1
-        
-    suspicious = [m for m, count in merchant_counts.items() if count > 2]
-    return {"suspicious_nodes": suspicious}
-
-@app.get("/health")
-def get_health(user: str = Depends(get_current_user)):
-    return {"status": "ok"}
-
-@app.get("/model-drift")
-def get_model_drift(user: str = Depends(get_current_user)):
-    return {"drift_status": "Model Stable"}
 
 @app.get("/transactions")
 def get_transactions(user: str = Depends(get_current_user)):
@@ -593,6 +787,91 @@ def get_transactions(user: str = Depends(get_current_user)):
             "risk_score": score
         })
     return txs
+
+# --------------------------------------------------
+# Startup guard: a duplicated path silently shadows the
+# later definition (FastAPI serves the first match), which
+# is how the auth-protected routes became dead code.
+# --------------------------------------------------
+
+def _assert_no_duplicate_routes() -> None:
+    seen: set[tuple] = set()
+    for r in app.routes:
+        path = getattr(r, "path", None)
+        methods = tuple(sorted(getattr(r, "methods", None) or ()))
+        if path is None:
+            continue
+        key = (path, methods)
+        if key in seen:
+            raise RuntimeError(f"Duplicate route registered: {methods} {path}")
+        seen.add(key)
+
+
+_assert_no_duplicate_routes()
+
+
+# --------------------------------------------------
+# Pre-payment payee check
+# --------------------------------------------------
+
+@app.post("/payee/check")
+def payee_check(payload: PayeeCheckRequest, user: str = Depends(get_current_user)):
+    """Score a payee BEFORE any money moves.
+
+    Everything else in this API scores the payer against their own history,
+    which cannot see a first-time victim paying a scammer. This looks at the
+    address being paid.
+    """
+    if not payload.payload.strip():
+        raise HTTPException(status_code=400, detail="Nothing to check")
+
+    result = check_payee(payload.payload, payer_id=user, amount=payload.amount)
+
+    # Fold the payer's own baseline in when there is one, so a payment that is
+    # odd FOR THEM still surfaces even if the payee looks fine.
+    profile = get_behavior_profile(user)
+    if profile and payload.amount:
+        history = get_user_transactions(user)
+        personal = evaluate_personalized_risk(
+            profile=profile,
+            history=history,
+            amount=payload.amount,
+            merchant=result["payee"]["display_name"] or result["payee"]["vpa"] or "",
+            timestamp=pd.Timestamp.now().isoformat(),
+            upi_id=result["payee"]["vpa"],
+        )
+        result["payer_behaviour"] = personal
+        # A payee-side BLOCK is never softened by the payer looking normal.
+        if result["decision"] == "APPROVE" and personal["risk_level"] == "HIGH":
+            result["decision"] = "WARN"
+            result["headline"] = "Unusual for you, even though the payee looks fine"
+    else:
+        result["payer_behaviour"] = None
+
+    return result
+
+
+@app.post("/payee/report")
+def payee_report(payload: PayeeReportRequest, user: str = Depends(get_current_user)):
+    """Report a payee. Reports are what turn one person's bad experience into
+    a signal for everyone else."""
+    if not payload.vpa.strip():
+        raise HTTPException(status_code=400, detail="No address given")
+    count = report_payee(payload.vpa, reporter=user, reason=payload.reason or "")
+    return {"vpa": payload.vpa, "reports": count}
+
+
+@app.post("/payee/confirm")
+def payee_confirm(payload: PayeeCheckRequest, user: str = Depends(get_current_user)):
+    """Record that the payer went ahead. This is what grows the reputation
+    graph: without it the store only ever knows what was uploaded."""
+    result = check_payee(payload.payload, payer_id=user, amount=payload.amount)
+    vpa = result["payee"]["key"]
+    if vpa and payload.amount:
+        record_payment(vpa, payer_id=user, amount=payload.amount,
+                       display_name=result["payee"]["display_name"])
+    return {"recorded": bool(vpa and payload.amount), "payee": vpa}
+
 
 if __name__ == "__main__":
     import uvicorn

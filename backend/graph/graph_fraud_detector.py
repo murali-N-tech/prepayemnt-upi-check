@@ -22,18 +22,11 @@ def get_graph():
 
 
 def detect_fraud_rings():
+    """Deprecated. Use backend.app.services.fraud_graph.detect_rings().
 
-    rings = []
-
-    for merchant in fraud_graph.nodes():
-
-        neighbors = list(fraud_graph.neighbors(merchant))
-
-        if len(neighbors) >= 3:
-
-            rings.append({
-                "merchant": merchant,
-                "users": neighbors
-            })
-
-    return rings
+    This walked every node in the in-memory graph, so a *payer* with three
+    merchants was reported as a merchant ring, and any popular merchant was
+    reported because popularity raises degree. It is kept only so old callers
+    do not break; it now returns nothing rather than noise.
+    """
+    return []

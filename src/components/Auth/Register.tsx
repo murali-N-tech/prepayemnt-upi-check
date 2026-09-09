@@ -1,18 +1,31 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import { UpiStatusNote, useUpiStatus } from "./UpiStatusNote";
+
+/** Same shape the server enforces, so the obvious mistakes are caught here. */
+const VPA_PATTERN = /^[a-z0-9.\-_]{2,256}@[a-z][a-z0-9.\-_]{1,63}$/;
 
 export const Register: React.FC<{ onSwitchToLogin: () => void }> = ({ onSwitchToLogin }) => {
-  const [username, setUsername] = useState("");
+  const [upiId, setUpiId] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
+  const upiStatus = useUpiStatus();
+
+  const normalised = useMemo(() => upiId.trim().toLowerCase(), [upiId]);
+  const shapeOk = VPA_PATTERN.test(normalised);
+  const showShapeHint = normalised.length > 0 && !shapeOk;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
+    if (!shapeOk) {
+      setError("Enter a UPI ID in the form yourname@bank.");
+      return;
+    }
     if (password !== confirmPassword) {
       setError("Passwords do not match");
       return;
@@ -26,7 +39,7 @@ export const Register: React.FC<{ onSwitchToLogin: () => void }> = ({ onSwitchTo
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username: normalised, password }),
       });
 
       const data = await response.json();
@@ -35,7 +48,7 @@ export const Register: React.FC<{ onSwitchToLogin: () => void }> = ({ onSwitchTo
         throw new Error(data.detail || "Registration failed");
       }
 
-      login(data.token, data.user_id, data.username);
+      login(data.token, data.user_id, data.upi_id || data.username);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -48,7 +61,7 @@ export const Register: React.FC<{ onSwitchToLogin: () => void }> = ({ onSwitchTo
       <div className="w-full max-w-md p-8 bg-gray-800 bg-opacity-60 backdrop-blur-lg rounded-2xl shadow-2xl border border-gray-700">
         <div className="text-center mb-8">
           <h2 className="text-3xl font-bold text-white mb-2">Create Account</h2>
-          <p className="text-gray-400">Join to secure your UPI transactions</p>
+          <p className="text-gray-400">Your UPI ID is your account</p>
         </div>
 
         {error && (
@@ -59,15 +72,30 @@ export const Register: React.FC<{ onSwitchToLogin: () => void }> = ({ onSwitchTo
 
         <form onSubmit={handleSubmit} className="space-y-5">
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Username</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">UPI ID</label>
             <input
               type="text"
               required
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-4 py-3 bg-gray-900 bg-opacity-50 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition duration-200"
-              placeholder="Choose a username"
+              autoComplete="username"
+              spellCheck={false}
+              autoCapitalize="none"
+              value={upiId}
+              onChange={(e) => setUpiId(e.target.value)}
+              className={`w-full px-4 py-3 bg-gray-900 bg-opacity-50 border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:border-transparent transition duration-200 ${
+                showShapeHint
+                  ? "border-amber-500 focus:ring-amber-500"
+                  : "border-gray-600 focus:ring-purple-500"
+              }`}
+              placeholder="yourname@bank"
             />
+            {showShapeHint ? (
+              <p className="mt-2 text-xs text-amber-300">
+                A UPI ID looks like <span className="font-mono">yourname@okaxis</span> — a name, an
+                @, then your bank's handle.
+              </p>
+            ) : (
+              <UpiStatusNote status={upiStatus} />
+            )}
           </div>
 
           <div>
@@ -75,10 +103,12 @@ export const Register: React.FC<{ onSwitchToLogin: () => void }> = ({ onSwitchTo
             <input
               type="password"
               required
+              minLength={8}
+              autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-4 py-3 bg-gray-900 bg-opacity-50 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition duration-200"
-              placeholder="Create a password"
+              placeholder="At least 8 characters"
             />
           </div>
 
@@ -87,6 +117,7 @@ export const Register: React.FC<{ onSwitchToLogin: () => void }> = ({ onSwitchTo
             <input
               type="password"
               required
+              autoComplete="new-password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               className="w-full px-4 py-3 bg-gray-900 bg-opacity-50 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition duration-200"

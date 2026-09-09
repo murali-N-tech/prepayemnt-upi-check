@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Share2, AlertCircle, RefreshCw } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
@@ -14,10 +14,13 @@ interface Node {
 }
 
 export default function NetworkGraph() {
-  const { token } = useAuth();
+  const { api } = useAuth();
   const [edges, setEdges] = useState<Edge[]>([]);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [suspiciousNodes, setSuspiciousNodes] = useState<string[]>([]);
+  const [suspiciousDetails, setSuspiciousDetails] = useState<
+    { node: string; fan_in: number; reasons: string[] }[]
+  >([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,22 +28,18 @@ export default function NetworkGraph() {
     setLoading(true);
     setError(null);
     try {
-      const headers = { Authorization: `Bearer ${token}` };
-      const [edgesRes, gnnRes] = await Promise.all([
-        fetch("/api/fraud-graph", { headers }),
-        fetch("/api/gnn-fraud-detection", { headers })
+      const [edgesData, gnnData] = await Promise.all([
+        api<{ edges?: { user: string; merchant: string }[] }>("/api/fraud-graph"),
+        api<{
+          suspicious_nodes?: string[];
+          details?: { node: string; fan_in: number; reasons: string[] }[];
+        }>("/api/gnn-fraud-detection"),
       ]);
-
-      if (!edgesRes.ok || !gnnRes.ok) {
-        throw new Error("Unable to retrieve graph telemetry");
-      }
-
-      const edgesData = await edgesRes.json();
-      const gnnData = await gnnRes.json();
 
       const fetchedEdges: Edge[] = edgesData.edges || [];
       setEdges(fetchedEdges);
       setSuspiciousNodes(gnnData.suspicious_nodes || []);
+      setSuspiciousDetails(gnnData.details || []);
 
       // Derive nodes and degrees
       const nodeMap: Record<string, { type: "user" | "merchant"; degree: number }> = {};
@@ -135,7 +134,7 @@ export default function NetworkGraph() {
             </div>
 
             <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-lg">
-              <span className="text-xs text-rose-500 block uppercase font-semibold">GNN Suspicious Flagged</span>
+              <span className="text-xs text-rose-500 block uppercase font-semibold">Graph anomalies</span>
               <span className="text-3xl font-extrabold text-rose-300 mt-1 block">{suspiciousNodes.length}</span>
             </div>
           </div>
@@ -266,6 +265,28 @@ export default function NetworkGraph() {
           )}
         </div>
       </div>
+      {suspiciousDetails.length > 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+          <h3 className="text-lg font-semibold text-white mb-1">Why these were flagged</h3>
+          <p className="text-xs text-slate-500 mb-4">
+            Graph analysis of the payer-to-payee network. Not a neural network - each
+            result carries the reason it was returned.
+          </p>
+          <ul className="space-y-3">
+            {suspiciousDetails.map((d) => (
+              <li key={d.node} className="bg-slate-950 border border-slate-800 rounded-lg p-3">
+                <div className="font-mono text-sm text-rose-300 mb-1.5">{d.node}</div>
+                <ul className="space-y-1">
+                  {d.reasons.map((r, i) => (
+                    <li key={i} className="text-xs text-slate-400">- {r}</li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
     </div>
   );
 }

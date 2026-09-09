@@ -1,13 +1,14 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Activity, Database, ShieldAlert, Search } from "lucide-react";
 import { Transaction } from "../types";
 import { useAuth } from "../context/AuthContext";
 
 export default function SystemMonitor() {
-  const { token } = useAuth();
+  const { api } = useAuth();
   const [txs, setTxs] = useState<Transaction[]>([]);
   const [drift, setDrift] = useState<string>("Checking...");
   const [health, setHealth] = useState<string>("Checking...");
+  const [healthDetail, setHealthDetail] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<"all" | "risk" | "safe">("all");
   const [loading, setLoading] = useState(false);
@@ -17,24 +18,16 @@ export default function SystemMonitor() {
     setLoading(true);
     setError(null);
     try {
-      const headers = { Authorization: `Bearer ${token}` };
-      const [txsRes, driftRes, healthRes] = await Promise.all([
-        fetch("/api/transactions", { headers }),
-        fetch("/api/model-drift", { headers }),
-        fetch("/api/health", { headers })
+      const [txsData, driftData, healthData] = await Promise.all([
+        api<Transaction[]>("/api/transactions"),
+        api<{ drift_status?: string }>("/api/model-drift"),
+        api<{ status?: string; model?: string; model_detail?: string | null }>("/api/health"),
       ]);
-
-      if (!txsRes.ok || !driftRes.ok || !healthRes.ok) {
-        throw new Error("Unable to read system health telemetry");
-      }
-
-      const txsData = await txsRes.json();
-      const driftData = await driftRes.json();
-      const healthData = await healthRes.json();
 
       setTxs(txsData || []);
       setDrift(driftData.drift_status || "Model Stable");
       setHealth(healthData.status === "ok" ? "HEALTHY" : "DEGRADED");
+      setHealthDetail(healthData.model_detail ?? null);
     } catch (err: any) {
       setError(err.message || "Failed to parse system metrics");
       setHealth("DEGRADED");
@@ -46,14 +39,16 @@ export default function SystemMonitor() {
 
   useEffect(() => {
     fetchTelemetry();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api]);
 
   const filteredTxs = txs.filter(t => {
     // Search filter
+    const q = searchQuery.toLowerCase();
     const matchesSearch =
-      t.transaction_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.sender.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (t.receiver && t.receiver.toLowerCase().includes(searchQuery.toLowerCase()));
+      (t.transaction_id ?? "").toLowerCase().includes(q) ||
+      (t.sender ?? "").toLowerCase().includes(q) ||
+      (t.receiver ?? "").toLowerCase().includes(q);
 
     // Risk level filter
     const matchesRisk =
@@ -66,6 +61,12 @@ export default function SystemMonitor() {
 
   return (
     <div className="space-y-8 animate-fade-in" id="system-monitor-container">
+      {healthDetail && (
+        <div className="bg-amber-500/10 border border-amber-500/20 text-amber-300 text-sm rounded-lg p-4">
+          {healthDetail}
+        </div>
+      )}
+
       <div>
         <h1 className="text-3xl font-bold tracking-tight text-white mb-2">System Monitor & Diagnostics</h1>
         <p className="text-slate-400">

@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
 
 export const Login: React.FC<{ onSwitchToRegister: () => void }> = ({ onSwitchToRegister }) => {
-  const [username, setUsername] = useState("");
+  const [upiId, setUpiId] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -19,7 +19,9 @@ export const Login: React.FC<{ onSwitchToRegister: () => void }> = ({ onSwitchTo
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ username, password }),
+        // The server identifies accounts by UPI ID; `username` is the wire
+        // field name it has always used.
+        body: JSON.stringify({ username: upiId.trim().toLowerCase(), password }),
       });
 
       const data = await response.json();
@@ -28,7 +30,7 @@ export const Login: React.FC<{ onSwitchToRegister: () => void }> = ({ onSwitchTo
         throw new Error(data.detail || "Login failed");
       }
 
-      login(data.token, data.user_id, data.username);
+      login(data.token, data.user_id, data.upi_id || data.username);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -41,7 +43,7 @@ export const Login: React.FC<{ onSwitchToRegister: () => void }> = ({ onSwitchTo
       <div className="w-full max-w-md p-8 bg-gray-800 bg-opacity-60 backdrop-blur-lg rounded-2xl shadow-2xl border border-gray-700">
         <div className="text-center mb-8">
           <h2 className="text-3xl font-bold text-white mb-2">Welcome Back</h2>
-          <p className="text-gray-400">Sign in to access your UPI risk dashboard</p>
+          <p className="text-gray-400">Sign in with the UPI ID you pay from</p>
         </div>
 
         {error && (
@@ -52,14 +54,17 @@ export const Login: React.FC<{ onSwitchToRegister: () => void }> = ({ onSwitchTo
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Username</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">UPI ID</label>
             <input
               type="text"
               required
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              spellCheck={false}
+              autoCapitalize="none"
+              value={upiId}
+              onChange={(e) => setUpiId(e.target.value)}
               className="w-full px-4 py-3 bg-gray-900 bg-opacity-50 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition duration-200"
-              placeholder="Enter your username"
+              placeholder="yourname@bank"
             />
           </div>
 
@@ -68,6 +73,7 @@ export const Login: React.FC<{ onSwitchToRegister: () => void }> = ({ onSwitchTo
             <input
               type="password"
               required
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-4 py-3 bg-gray-900 bg-opacity-50 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition duration-200"

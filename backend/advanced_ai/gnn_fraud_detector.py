@@ -1,26 +1,16 @@
-import networkx as nx
+"""Retired.
 
-def gnn_risk(edges):
+This module was presented as GNN fraud detection. It contained no neural
+network: it returned every node with degree >= 3, which on real data returns
+the most popular merchants.
 
-    G = nx.Graph()
+The real implementation is backend/app/services/fraud_graph.py, which works on
+the persisted payer -> payee edges and attaches a reason to every result.
+"""
 
-    # Build graph
-    for e in edges:
+from backend.app.services.fraud_graph import load_edges, suspicious_payees
 
-        user = e.get("user")
-        merchant = e.get("merchant")
 
-        if user and merchant:
-            G.add_edge(user, merchant)
-
-    suspicious_nodes = []
-
-    # Simple GNN-like heuristic
-    for node in G.nodes():
-
-        degree = G.degree(node)
-
-        if degree >= 3:
-            suspicious_nodes.append(node)
-
-    return suspicious_nodes
+def gnn_risk(edges=None):  # noqa: ARG001 - signature kept for old callers
+    """Deprecated. Use fraud_graph.suspicious_payees()."""
+    return [d["node"] for d in suspicious_payees(load_edges())]
