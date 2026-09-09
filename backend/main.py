@@ -40,7 +40,11 @@ from backend.app.services.fraud_graph import detect_rings, graph_summary, load_e
 from backend.app.services.payee_check import check_payee
 from backend.app.services.payee_reputation import record_payment, report_payee
 
-from backend.app.services.behavioral_biometrics import behavior_score
+from backend.app.services.behavioral_biometrics import (
+    behavior_score,
+    behaviour_risk,
+    normalised_velocity,
+)
 from backend.app.services.temporal_gnn import temporal_patterns
 from backend.app.services.drift_monitor import detect_drift
 
@@ -127,7 +131,6 @@ class Transaction(BaseModel):
 
 class PersonalizedRiskCheck(BaseModel):
 
-    user_id: str
     amount: float
     merchant: str
     timestamp: str
@@ -163,13 +166,19 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
 
 @app.post("/auth/register")
 def register(user: UserAuth):
+    username = (user.username or "").strip()
+    if not username or not user.password:
+        raise HTTPException(status_code=400, detail="Username and password are required")
+    if len(user.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
     user_id = f"usr_{uuid.uuid4().hex[:8]}"
     hashed = hash_password(user.password)
-    success = create_user(user_id, user.username, hashed)
+    success = create_user(user_id, username, hashed)
     if not success:
         raise HTTPException(status_code=400, detail="Username already exists")
     token = create_token(user_id)
-    return {"message": "User created", "token": token, "user_id": user_id, "username": user.username}
+    return {"token": token, "user_id": user_id, "username": username}
 
 @app.post("/auth/login")
 def login(user: UserAuth):
@@ -212,24 +221,41 @@ def predict(tx: Transaction):
 
     is_night = 1 if hour < 6 or hour > 22 else 0
 
-    df = get_all_transactions()
+    # This payer's own recent activity, not everyone's. Reading the global
+    # table meant "seconds since last transaction" was measured against a
+    # stranger's payment, which produced 0 - or a negative number - and fed
+    # the model a value it never saw in training.
+    df = get_all_transactions(sender=tx.sender, limit=50)
+
+    # No prior payment is not the same as "one second ago". Default to a long
+    # gap so an absent history does not read as a rapid-fire burst.
+    NO_PRIOR_GAP = 86_400.0
 
     if df.empty:
-
         rolling_avg_amount = tx.amount
         rolling_txn_count = 1
-        time_gap = 100
-
+        time_gap = NO_PRIOR_GAP
     else:
+        recent = df.tail(5)
+        rolling_avg_amount = float(recent["amount"].mean())
+        rolling_txn_count = int(len(recent))
 
-        rolling_avg_amount = df["amount"].tail(5).mean()
-        rolling_txn_count = len(df.tail(5))
+        time_gap = NO_PRIOR_GAP
+        last_time = pd.to_datetime(df.iloc[-1]["timestamp"], errors="coerce", utc=True)
+        now = pd.to_datetime(current_time, errors="coerce", utc=True)
+        if pd.notna(last_time) and pd.notna(now):
+            delta = (now - last_time).total_seconds()
+            # Clamp: a clock skew or an out-of-order timestamp must not become
+            # a negative gap, which reads as the strongest velocity signal there is.
+            time_gap = float(min(max(delta, 1.0), NO_PRIOR_GAP))
 
-        try:
-            last_time = pd.to_datetime(df.iloc[-1]["timestamp"])
-            time_gap = (current_time - last_time).total_seconds()
-        except:
-            time_gap = 100
+    # Payments already made today by this payer, for the velocity feature.
+    txns_today = 1
+    if not df.empty:
+        day = pd.to_datetime(df["timestamp"], errors="coerce", utc=True).dt.date
+        today = pd.to_datetime(current_time, errors="coerce", utc=True)
+        if pd.notna(today):
+            txns_today = int((day == today.date()).sum()) + 1
 
     # The model is trained on these exact features (backend/ml/features.py is
     # the single mapping, so training and serving cannot drift apart).
@@ -243,7 +269,7 @@ def predict(tx: Transaction):
         reputation=payee.as_dict(),
         seconds_since_last_txn=time_gap,
         txns_last_hour=tx.velocity_score,
-        txns_today=rolling_txn_count,
+        txns_today=txns_today,
     )
 
     prob = float(model.predict_proba(to_frame(features))[0][1])
@@ -422,14 +448,19 @@ def behavior(tx_id: str):
     if tx is None:
         raise HTTPException(status_code=404, detail="Transaction Not Found")
 
-    result = behavior_score(
-        tx["velocity_score"],
-        tx["device_score"]
-    )
+    label = behavior_score(tx["velocity_score"], tx["device_score"])
+    score = behaviour_risk(tx["velocity_score"], tx["device_score"])
 
     return {
         "transaction_id": tx_id,
-        "behavior_risk": result
+        "behavior_risk": label,
+        # The number the label came from, so the caller can see the margin
+        # rather than only which side of a threshold it fell.
+        "behavior_score": round(score, 3),
+        "components": {
+            "velocity_normalised": round(normalised_velocity(tx["velocity_score"]), 3),
+            "device_score": float(tx["device_score"]),
+        },
     }
 
 
@@ -491,10 +522,12 @@ MAX_STATEMENT_ROWS = 20_000
 
 @app.post("/statement/upload")
 async def upload_statement(
-    user_id: str = Form(...),
     file: UploadFile = File(...),
     retain_source: bool = Form(False),
+    user_id: str = Depends(get_current_user),
 ):
+    """The statement belongs to whoever uploaded it. A user_id in the form body
+    is ignored so one account cannot write into another's history."""
 
     content = await file.read()
     if not content:
@@ -570,11 +603,43 @@ def get_my_profile(user: str = Depends(get_current_user)):
     return profile
 
 
-@app.post("/personalized-risk-check")
-def personalized_risk_check(payload: PersonalizedRiskCheck):
+MAX_STATEMENT_PAGE = 2000
 
-    profile = get_behavior_profile(payload.user_id)
-    history = get_user_transactions(payload.user_id)
+
+@app.get("/statement-transactions")
+def statement_transactions(
+    limit: int = MAX_STATEMENT_PAGE,
+    offset: int = 0,
+    user: str = Depends(get_current_user),
+):
+    """The signed-in user's statement lines, paged.
+
+    Capped because a large statement previously went to the browser in one
+    response and the profile page had to paginate a quarter of a million rows
+    in JavaScript.
+    """
+    limit = max(1, min(int(limit or MAX_STATEMENT_PAGE), MAX_STATEMENT_PAGE))
+    offset = max(0, int(offset or 0))
+
+    df = get_user_transactions(user)
+    total = int(len(df))
+    page = df.iloc[offset:offset + limit].fillna("")
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "truncated": total > offset + limit,
+        "transactions": page.to_dict(orient="records"),
+    }
+
+
+@app.post("/personalized-risk-check")
+def personalized_risk_check(
+    payload: PersonalizedRiskCheck, user: str = Depends(get_current_user)
+):
+    profile = get_behavior_profile(user)
+    history = get_user_transactions(user)
 
     result = evaluate_personalized_risk(
         profile=profile,
@@ -587,7 +652,7 @@ def personalized_risk_check(payload: PersonalizedRiskCheck):
     )
 
     return {
-        "user_id": payload.user_id,
+        "user_id": user,
         **result,
     }
 

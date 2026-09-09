@@ -5,6 +5,8 @@ from typing import Any
 
 import pandas as pd
 
+from backend.app.services.merchant import merchant_key
+
 
 def evaluate_personalized_risk(
     profile: dict[str, Any] | None,
@@ -69,12 +71,33 @@ def evaluate_personalized_risk(
         score += 15
         reasons.append("Amount is higher than any previously seen transaction in the uploaded statements")
 
-    merchant_key = merchant.strip()
-    if merchant_key not in favorite_merchants and merchant_key not in history.get("merchant", pd.Series(dtype=str)).astype(str).tolist():
+    # Compare canonical identities, not raw strings. "CHINTHADA MURALI
+    # NAGARAJU" and "Chinthada Murali Nagaraju" are the same payee, and
+    # comparing them with == made the heaviest merchant rule fire on ordinary
+    # repeat payments.
+    key = merchant_key(merchant, upi_id)
+    known_keys = set(profile.get("known_merchant_keys") or [])
+    if not known_keys:
+        # Profile predates this field: derive the keys from the history.
+        known_keys = {
+            merchant_key(m, u)
+            for m, u in zip(
+                history.get("merchant", pd.Series(dtype=str)).astype(str).tolist(),
+                history.get("upi_id", pd.Series(dtype=str)).astype(str).tolist(),
+            )
+        }
+    known_keys.discard("")
+
+    favourite_keys = set(profile.get("favorite_merchant_keys") or []) or {
+        merchant_key(m) for m in favorite_merchants
+    }
+
+    if key and key not in known_keys and key not in favourite_keys:
         score += 20
         reasons.append("Merchant has not appeared in the user's historical statement profile")
 
-    if upi_id and upi_id not in known_upi_ids:
+    normalised_upi = (upi_id or "").strip().lower()
+    if normalised_upi and normalised_upi not in {u.strip().lower() for u in known_upi_ids}:
         score += 12
         reasons.append("UPI ID is new for this user")
 

@@ -13,10 +13,36 @@ DATA_DIR = Path("data")
 DB_PATH = DATA_DIR / "behavior_profiles.db"
 
 
+# Schema setup ran on every single connection, which meant a CREATE TABLE, four
+# CREATE INDEX statements and a commit on every request - write traffic for a
+# read, and lock churn as soon as two processes talk to the file. It only needs
+# to happen once per database.
+#
+# Keyed by path rather than a single flag: the maintenance scripts point
+# DB_PATH at another file with --db, and tests point it at a temp directory. A
+# boolean would let the second database go without a schema.
+_SCHEMA_DONE: set[str] = set()
+
+
 def _get_connection() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    # Two processes share this file (Express forwards to FastAPI, and the
+    # scripts run alongside), so wait for a lock rather than failing instantly.
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA foreign_keys = ON")
+
+    key = str(Path(DB_PATH).resolve())
+    if key in _SCHEMA_DONE:
+        return conn
+
+    _ensure_schema(conn)
+    _SCHEMA_DONE.add(key)
+    return conn
+
+
+def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS statement_transactions (

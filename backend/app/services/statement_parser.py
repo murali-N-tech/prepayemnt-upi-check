@@ -1468,6 +1468,21 @@ def generate_behavior_profile(transactions: list[dict[str, Any]]) -> dict[str, A
             .to_dict()
         )
 
+    # Matching is done on a canonical key, but the profile still shows the
+    # user the spelling they recognise.
+    from backend.app.services.merchant import merchant_key  # local: avoids a cycle
+
+    spend_keys = [
+        merchant_key(m, u)
+        for m, u in zip(spend["merchant"].tolist(), spend["upi_id"].tolist())
+    ]
+    all_keys = sorted({
+        k for k in (
+            merchant_key(m, u)
+            for m, u in zip(df["merchant"].tolist(), df["upi_id"].tolist())
+        ) if k
+    })
+
     favorite_merchants = (
         spend["merchant"].value_counts().head(5).index.tolist()
     )
@@ -1489,6 +1504,11 @@ def generate_behavior_profile(transactions: list[dict[str, Any]]) -> dict[str, A
         # told rather than shown a confident but meaningless "most active hour".
         "transactions_without_time": undated_time,
         "favorite_merchants": favorite_merchants,
+        # Canonical payee identities, used for "have they paid this payee
+        # before". Display names vary in case and spacing between statements,
+        # so comparing them directly makes every repeat payment look new.
+        "known_merchant_keys": all_keys,
+        "favorite_merchant_keys": sorted({k for k in spend_keys if k})[:40],
         "average_daily_transactions": average_daily_transactions,
         "failed_transactions": int(
             df["status"].isin(["FAILED", "FAILURE", "DECLINED"]).sum()

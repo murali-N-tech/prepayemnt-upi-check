@@ -19,6 +19,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
+      - name: Scan for committed credentials
+        run: python scripts/check_secrets.py
+
       - name: Run tests
         env:
           # Only needed so backend.app.core.security imports; not a real secret.

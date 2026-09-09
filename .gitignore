@@ -51,3 +51,10 @@ Thumbs.db
 # code that produced it. metrics.json IS committed - it is the evidence.
 models/*.pkl
 models/shap_background.json
+data/_migrated_backup/
+
+# SQLite side files and Vite's temp config
+*.db-journal
+*.db-wal
+*.db-shm
+vite.config.ts.timestamp-*.mjs

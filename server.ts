@@ -3,7 +3,6 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import multer from "multer";
-import bcrypt from "bcryptjs";
 import { createServer as createViteServer } from "vite";
 
 // Load .env (Node >= 20.12). Real environment variables still win.
@@ -21,8 +20,6 @@ if (!JWT_SECRET) {
   );
   process.exit(1);
 }
-const TOKEN_TTL_HOURS = Number(process.env.JWT_TTL_HOURS ?? 24);
-const BCRYPT_ROUNDS = 12;
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -33,18 +30,13 @@ app.use(express.urlencoded({ extended: true }));
 // Configure Multer for uploaded files.
 // One upload previously inserted 250,000 rows and grew the database to 147 MB.
 const MAX_STATEMENT_BYTES = 10 * 1024 * 1024;
-const MAX_STATEMENT_UPLOAD_ROWS = 20_000;
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_STATEMENT_BYTES, files: 1 },
 });
 
 // File Paths for local databases
-const DB_FILE = path.join(process.cwd(), "transactions.csv");
 const DATA_DIR = path.join(process.cwd(), "data");
-const PROFILES_FILE = path.join(DATA_DIR, "behavior_profiles.json");
-const STATEMENT_TXS_FILE = path.join(DATA_DIR, "statement_transactions.json");
-const USERS_FILE = path.join(DATA_DIR, "users.json");
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
@@ -55,14 +47,6 @@ if (!fs.existsSync(DATA_DIR)) {
 // AUTH SYSTEM
 // -----------------------------------------------------------------------------
 
-interface StoredUser {
-  user_id: string;
-  username: string;
-  password_hash?: string;
-  /** Legacy plaintext field. Upgraded to password_hash on first successful login. */
-  password?: string;
-}
-
 interface AuthUser {
   user_id: string;
   username: string;
@@ -72,44 +56,11 @@ interface AuthedRequest extends Request {
   authUser: AuthUser;
 }
 
-function readUsers(): StoredUser[] {
-  if (!fs.existsSync(USERS_FILE)) return [];
-  try {
-    return JSON.parse(fs.readFileSync(USERS_FILE, "utf-8"));
-  } catch {
-    return [];
-  }
-}
-
-function saveUsers(users: StoredUser[]) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
-}
-
-// --- HS256 JWT, signed with the same JWT_SECRET the Python backend uses. -----
-// Tokens are stateless, so a server restart no longer silently invalidates
-// every session while the browser still believes it is logged in.
-
-function b64url(value: string | Buffer): string {
-  return Buffer.from(value).toString("base64url");
-}
-
-function signToken(user: AuthUser): string {
-  const now = Math.floor(Date.now() / 1000);
-  const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-  const payload = b64url(
-    JSON.stringify({
-      sub: user.user_id,
-      username: user.username,
-      iat: now,
-      exp: now + TOKEN_TTL_HOURS * 3600,
-    })
-  );
-  const signature = crypto
-    .createHmac("sha256", JWT_SECRET as string)
-    .update(`${header}.${payload}`)
-    .digest("base64url");
-  return `${header}.${payload}.${signature}`;
-}
+// --- HS256 JWT verification -------------------------------------------------
+// Tokens are ISSUED by the Python service, which owns the single users table.
+// Express only verifies them, using the same JWT_SECRET. Keeping two user
+// stores meant an account created in one could not sign in to the other, and a
+// profile built through one backend was invisible to the other.
 
 function verifyToken(token: string): AuthUser | null {
   const parts = token.split(".");
@@ -159,260 +110,13 @@ function currentUser(req: Request): AuthUser {
   return (req as AuthedRequest).authUser;
 }
 
-// POST /api/auth/register
-app.post(["/auth/register", "/api/auth/register"], async (req, res) => {
-  const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
-  const password = typeof req.body?.password === "string" ? req.body.password : "";
-
-  if (!username || !password) {
-    return res.status(400).json({ detail: "Username and password are required" });
-  }
-  if (password.length < 8) {
-    return res.status(400).json({ detail: "Password must be at least 8 characters" });
-  }
-
-  const users = readUsers();
-  if (users.some((u) => u.username.toLowerCase() === username.toLowerCase())) {
-    return res.status(409).json({ detail: "Username already exists" });
-  }
-
-  const user_id = "user_" + crypto.randomBytes(8).toString("hex");
-  users.push({ user_id, username, password_hash: await bcrypt.hash(password, BCRYPT_ROUNDS) });
-  saveUsers(users);
-
-  const authUser: AuthUser = { user_id, username };
-  res.json({ token: signToken(authUser), ...authUser });
-});
-
-// POST /api/auth/login
-app.post(["/auth/login", "/api/auth/login"], async (req, res) => {
-  const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
-  const password = typeof req.body?.password === "string" ? req.body.password : "";
-
-  if (!username || !password) {
-    return res.status(400).json({ detail: "Username and password are required" });
-  }
-
-  const users = readUsers();
-  const user = users.find((u) => u.username.toLowerCase() === username.toLowerCase());
-
-  let ok = false;
-  if (user?.password_hash) {
-    ok = await bcrypt.compare(password, user.password_hash);
-  } else if (user && typeof user.password === "string") {
-    // Legacy plaintext record: verify once, then upgrade it in place.
-    ok = user.password === password;
-    if (ok) {
-      user.password_hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-      delete user.password;
-      saveUsers(users);
-      console.log(`[auth] migrated "${user.username}" from plaintext to bcrypt`);
-    }
-  }
-
-  if (!user || !ok) {
-    return res.status(401).json({ detail: "Invalid username or password" });
-  }
-
-  const authUser: AuthUser = { user_id: user.user_id, username: user.username };
-  res.json({ token: signToken(authUser), ...authUser });
-});
 
 // -----------------------------------------------------------------------------
 // IN-MEMORY & FILE STORAGE OPERATIONS
 // -----------------------------------------------------------------------------
 
-interface TransactionRecord {
-  transaction_id: string;
-  amount: number;
-  device_score: number;
-  location_score: number;
-  velocity_score: number;
-  sender: string;
-  receiver: string;
-  timestamp: string;
-  risk: number;
-  risk_score: number;
-}
-
-interface StatementTransaction {
-  statement_id: string;
-  user_id: string;
-  timestamp: string;
-  amount: number;
-  merchant: string;
-  upi_id?: string;
-  status: string;
-  reference_number?: string;
-  source_type: string;
-  raw_line: string;
-  /** "DEBIT" (money out) or "CREDIT" (money in). */
-  txn_type: string;
-  created_at: string;
-}
-
-interface BehaviorProfile {
-  user_id: string;
-  transaction_count: number;
-  debit_count: number;
-  credit_count: number;
-  avg_amount: number;
-  max_amount: number;
-  min_amount: number;
-  most_active_hour: number | null;
-  night_transactions: number;
-  weekend_transactions: number;
-  transactions_without_time: number;
-  favorite_merchants: string[];
-  average_daily_transactions: number;
-  failed_transactions: number;
-  known_upi_ids: string[];
-  merchant_frequency: Record<string, number>;
-  hourly_distribution: Record<string, number>;
-  monthly_totals: Record<string, number>;
-  source_type: string;
-  updated_at: string;
-}
-
-// Helper to read and parse CSV Transactions
-function readCsvTransactions(): TransactionRecord[] {
-  if (!fs.existsSync(DB_FILE)) {
-    return [];
-  }
-  try {
-    const data = fs.readFileSync(DB_FILE, "utf-8");
-    const lines = data.split(/\r?\n/);
-    if (lines.length <= 1) return [];
-
-    const headers = lines[0].split(",").map(h => h.trim());
-    const records: TransactionRecord[] = [];
-
-    for (let i = 1; i < lines.length; i++) {
-      if (!lines[i].trim()) continue;
-      // Handle simple CSV splitting (assuming no embedded commas for this dataset)
-      const values = lines[i].split(",").map(v => v.trim());
-      if (values.length < headers.length) continue;
-
-      const rec: any = {};
-      headers.forEach((header, idx) => {
-        const val = values[idx];
-        if (header === "amount" || header === "device_score" || header === "location_score" || header === "velocity_score" || header === "risk" || header === "risk_score") {
-          rec[header] = parseFloat(val) || 0;
-        } else {
-          rec[header] = val;
-        }
-      });
-      records.push(rec as TransactionRecord);
-    }
-    return records;
-  } catch (err) {
-    console.error("Error reading transactions CSV:", err);
-    return [];
-  }
-}
-
 // Transactions are written by the Python service, which owns /predict. Two
 // processes appending to the same CSV is how rows get lost.
-
-// Load and save statement transactions JSON
-function readStatementTransactions(): StatementTransaction[] {
-  if (!fs.existsSync(STATEMENT_TXS_FILE)) {
-    return [];
-  }
-  try {
-    return JSON.parse(fs.readFileSync(STATEMENT_TXS_FILE, "utf-8"));
-  } catch {
-    return [];
-  }
-}
-
-/** Natural key for a statement line, used to skip re-uploaded rows. */
-function statementKey(t: StatementTransaction): string {
-  return [t.user_id, t.timestamp, t.amount, t.merchant, t.reference_number ?? ""].join("|");
-}
-
-function saveStatementTransactions(txs: StatementTransaction[]): number {
-  try {
-    const existing = readStatementTransactions();
-    const seen = new Set(existing.map(statementKey));
-
-    // C4: re-uploading the same statement used to double the user's history,
-    // which halved the risk engine's sensitivity.
-    const fresh = txs.filter((t) => {
-      const key = statementKey(t);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
-    if (fresh.length > 0) {
-      fs.writeFileSync(
-        STATEMENT_TXS_FILE,
-        JSON.stringify([...existing, ...fresh], null, 2),
-        "utf-8"
-      );
-    }
-    return fresh.length;
-  } catch (err) {
-    console.error("Error saving statement transactions:", err);
-    return 0;
-  }
-}
-
-// Load and save profiles JSON
-function readBehaviorProfiles(): Record<string, BehaviorProfile> {
-  if (!fs.existsSync(PROFILES_FILE)) {
-    return {};
-  }
-  try {
-    return JSON.parse(fs.readFileSync(PROFILES_FILE, "utf-8"));
-  } catch {
-    return {};
-  }
-}
-
-function saveBehaviorProfile(userId: string, profile: BehaviorProfile) {
-  try {
-    const profiles = readBehaviorProfiles();
-    profiles[userId] = profile;
-    fs.writeFileSync(PROFILES_FILE, JSON.stringify(profiles, null, 2), "utf-8");
-  } catch (err) {
-    console.error("Error saving behavior profile:", err);
-  }
-}
-
-// A statement column header repeated on every page reads as a transaction if
-// nothing rejects it. One such row became a real user's max_amount.
-const HEADER_WORDS_RE =
-  /date\s*&?\s*time|transaction\s*details?|particulars|narration|withdrawal|deposit|closing\s*balance|opening\s*balance|\bamount\b|\bbalance\b|\bcredit\b|\bdebit\b|sent\s*received|value\s*date|cheque|ref(?:erence)?\s*no/gi;
-
-function looksLikeHeader(text: string): boolean {
-  if (!text) return false;
-  const hits = new Set((text.match(HEADER_WORDS_RE) || []).map(m => m.toLowerCase()));
-  if (hits.size >= 2) return true;
-  return hits.size === 1 && !/@[a-z]{2,}/i.test(text) && text.split(/\s+/).length <= 8;
-}
-
-/** Splits one CSV row, honouring double-quoted fields containing commas. */
-function splitCsvRow(line: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (line[i + 1] === '"') { cur += '"'; i++; } else { inQuotes = false; }
-      } else cur += ch;
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === ",") {
-      out.push(cur.trim()); cur = "";
-    } else cur += ch;
-  }
-  out.push(cur.trim());
-  return out;
-}
 
 // -----------------------------------------------------------------------------
 // PYTHON BACKEND PROXY
@@ -471,6 +175,60 @@ async function forwardJson(
   });
 }
 
+/** Forwards an uploaded file to the Python service. */
+async function proxyUpload(req: Request, res: Response, path: string) {
+  const file = (req as Request & { file?: Express.Multer.File }).file;
+  if (!file) {
+    return res.status(400).json({ detail: "No file uploaded" });
+  }
+  try {
+    const FormData = (await import("form-data")).default;
+    const form = new FormData();
+    form.append("retain_source", String(req.body?.retain_source === "true"));
+    form.append("file", file.buffer, {
+      filename: file.originalname || "statement",
+      contentType: file.mimetype || "application/octet-stream",
+    });
+
+    const target = new URL(path, PYTHON_BACKEND);
+    const http = await import("http");
+    const upstream = await new Promise<{ status: number; body: any }>((resolve, reject) => {
+      const r = http.request(
+        {
+          hostname: target.hostname,
+          port: target.port || 80,
+          path: target.pathname,
+          method: "POST",
+          headers: {
+            ...form.getHeaders(),
+            ...(req.headers.authorization ? { Authorization: req.headers.authorization } : {}),
+          },
+        },
+        (up) => {
+          let raw = "";
+          up.on("data", (c) => (raw += c));
+          up.on("end", () => {
+            try {
+              resolve({ status: up.statusCode ?? 500, body: JSON.parse(raw) });
+            } catch {
+              resolve({ status: 502, body: { detail: `Bad JSON from backend: ${raw.slice(0, 200)}` } });
+            }
+          });
+        }
+      );
+      r.on("error", reject);
+      form.pipe(r);
+    });
+    res.status(upstream.status).json(upstream.body);
+  } catch (err: any) {
+    res.status(503).json({
+      detail:
+        `The statement parser is not running. Start it with "python backend/main.py" ` +
+        `and try again. (${err.message})`,
+    });
+  }
+}
+
 /** Forwards a request, turning an unreachable backend into a clear message. */
 async function proxyToPython(
   req: Request,
@@ -495,27 +253,6 @@ async function proxyToPython(
   }
 }
 
-// Graph connection storage
-interface GraphEdge {
-  user: string;
-  merchant: string;
-}
-const graphEdges: GraphEdge[] = [];
-
-// Populate graph connection cache from transactions.csv on start
-function buildGraphCache() {
-  const txs = readCsvTransactions();
-  txs.forEach(t => {
-    if (t.sender && t.receiver) {
-      const exists = graphEdges.some(e => e.user === t.sender && e.merchant === t.receiver);
-      if (!exists) {
-        graphEdges.push({ user: t.sender, merchant: t.receiver });
-      }
-    }
-  });
-}
-buildGraphCache();
-
 // -----------------------------------------------------------------------------
 // CORE BUSINESS LOGIC & COMPATIBILITY ENDPOINTS
 // -----------------------------------------------------------------------------
@@ -530,18 +267,36 @@ app.get(["/health", "/api/health"], (_req, res) => {
 });
 
 // GET Transactions List
-app.get(["/transactions", "/api/transactions"], requireAuth, (req, res) => {
-  const { user_id, username } = currentUser(req);
-  const mine = readCsvTransactions().filter(
-    (t) => t.sender === user_id || t.sender === username
-  );
-  res.json(mine);
-});
 
 // POST Analyze / Predict Transaction
 // Scoring lives in the Python service, which owns the trained model. Express
 // used to run its own hardcoded rule ladder here, so the same transaction
 // scored differently depending on which backend answered.
+// Auth is issued by the Python service, which owns the single users table.
+app.post(["/auth/register", "/api/auth/register"], (req, res) =>
+  proxyToPython(req, res, "/auth/register")
+);
+app.post(["/auth/login", "/api/auth/login"], (req, res) =>
+  proxyToPython(req, res, "/auth/login")
+);
+
+app.get(["/transactions", "/api/transactions"], requireAuth, (req, res) =>
+  proxyToPython(req, res, "/transactions", "GET")
+);
+
+app.get(["/statement-transactions", "/api/statement-transactions"], requireAuth, (req, res) => {
+  const q = new URLSearchParams(req.query as Record<string, string>).toString();
+  return proxyToPython(req, res, `/statement-transactions${q ? `?${q}` : ""}`, "GET");
+});
+
+app.get(["/profiles/me", "/api/profiles/me"], requireAuth, (req, res) =>
+  proxyToPython(req, res, "/profiles/me", "GET")
+);
+
+app.post(["/personalized-risk-check", "/api/personalized-risk-check"], requireAuth, (req, res) =>
+  proxyToPython(req, res, "/personalized-risk-check")
+);
+
 app.post(["/predict", "/api/predict"], requireAuth, (req, res) => {
   // The payer is whoever holds the token; never trust a client-supplied id.
   req.body = { ...(req.body ?? {}), sender: currentUser(req).user_id };
@@ -549,16 +304,9 @@ app.post(["/predict", "/api/predict"], requireAuth, (req, res) => {
 });
 
 // GET Heatmap coords
-app.get(["/heatmap", "/api/heatmap"], requireAuth, (_req, res) => {
-  const txs = readCsvTransactions();
-  if (txs.length < 2) {
-    return res.json({ error: "Not enough transactions" });
-  }
-  res.json({
-    amount: txs.map(t => t.amount),
-    risk: txs.map(t => t.risk)
-  });
-});
+app.get(["/heatmap", "/api/heatmap"], requireAuth, (req, res) =>
+  proxyToPython(req, res, "/heatmap", "GET")
+);
 
 // GET SHAP Explainer
 app.get(["/explain/:tx_id", "/api/explain/:tx_id"], requireAuth, (req, res) =>
@@ -581,61 +329,19 @@ app.get(["/fraud-rings", "/api/fraud-rings"], requireAuth, (req, res) =>
 );
 
 // GET Temporal Patterns (count fraud transactions by hour)
-app.get(["/temporal-patterns", "/api/temporal-patterns"], requireAuth, (_req, res) => {
-  const txs = readCsvTransactions();
-  const hourMap: Record<string, number> = {};
-  for (let i = 0; i < 24; i++) {
-    hourMap[i.toString()] = 0;
-  }
-
-  txs.forEach(t => {
-    if (t.risk === 1) {
-      try {
-        const hour = new Date(t.timestamp).getHours();
-        hourMap[hour.toString()] = (hourMap[hour.toString()] || 0) + 1;
-      } catch {}
-    }
-  });
-
-  res.json(hourMap);
-});
+app.get(["/temporal-patterns", "/api/temporal-patterns"], requireAuth, (req, res) =>
+  proxyToPython(req, res, "/temporal-patterns", "GET")
+);
 
 // GET Behavioral Biometrics
-app.get(["/behavior/:tx_id", "/api/behavior/:tx_id"], requireAuth, (req, res) => {
-  const { tx_id } = req.params;
-  const txs = readCsvTransactions();
-  const tx = txs.find(t => t.transaction_id === tx_id);
-
-  if (!tx) {
-    return res.status(404).json({ error: "Transaction Not Found" });
-  }
-
-  const mean = (tx.velocity_score + tx.device_score) / 2;
-  let status = "Normal";
-  if (mean > 0.8) status = "High Risk";
-  else if (mean > 0.5) status = "Medium Risk";
-
-  res.json({
-    transaction_id: tx_id,
-    behavior_risk: status
-  });
-});
+app.get(["/behavior/:tx_id", "/api/behavior/:tx_id"], requireAuth, (req, res) =>
+  proxyToPython(req, res, `/behavior/${encodeURIComponent(req.params.tx_id)}`, "GET")
+);
 
 // GET Model Drift status
-app.get(["/model-drift", "/api/model-drift"], requireAuth, (_req, res) => {
-  const txs = readCsvTransactions();
-  if (txs.length < 20) {
-    return res.json({ status: "Not enough data" });
-  }
-
-  const first10 = txs.slice(0, 10).reduce((acc, t) => acc + t.risk, 0) / 10;
-  const last10 = txs.slice(-10).reduce((acc, t) => acc + t.risk, 0) / 10;
-  const diff = Math.abs(first10 - last10);
-
-  res.json({
-    drift_status: diff > 0.3 ? "Drift Detected" : "Model Stable"
-  });
-});
+app.get(["/model-drift", "/api/model-drift"], requireAuth, (req, res) =>
+  proxyToPython(req, res, "/model-drift", "GET")
+);
 
 // GET GNN Fraud Detection (suspicious nodes with degree >= 3)
 app.get(["/gnn-fraud-detection", "/api/gnn-fraud-detection"], requireAuth, (req, res) =>
@@ -643,608 +349,20 @@ app.get(["/gnn-fraud-detection", "/api/gnn-fraud-detection"], requireAuth, (req,
 );
 
 // GET Profile by user_id
-app.get(["/profiles/me", "/api/profiles/me"], requireAuth, (req, res) => {
-  const profiles = readBehaviorProfiles();
-  const profile = profiles[currentUser(req).user_id];
 
-  if (!profile) {
-    return res.status(404).json({ error: "Behavior profile not found" });
-  }
-  res.json(profile);
-});
 
-// GET Statement Transactions for the signed-in user.
-// Capped so a very large statement cannot blow up the response or the browser.
-const MAX_STATEMENT_ROWS = 2000;
-
-app.get(
-  ["/statement-transactions", "/api/statement-transactions"],
-  requireAuth,
-  (req, res) => {
-    const { user_id } = currentUser(req);
-    const all = readStatementTransactions().filter((t) => t.user_id === user_id);
-
-    const limit = Math.min(
-      Math.max(parseInt(String(req.query.limit ?? MAX_STATEMENT_ROWS), 10) || MAX_STATEMENT_ROWS, 1),
-      MAX_STATEMENT_ROWS
-    );
-    const offset = Math.max(parseInt(String(req.query.offset ?? 0), 10) || 0, 0);
-
-    res.json({
-      total: all.length,
-      limit,
-      offset,
-      truncated: all.length > offset + limit,
-      transactions: all.slice(offset, offset + limit),
-    });
-  }
-);
-
-// POST Personalized Risk Check for the signed-in user
-app.post(["/personalized-risk-check", "/api/personalized-risk-check"], requireAuth, (req, res) => {
-  const { amount, merchant, timestamp, upi_id, location } = req.body ?? {};
-  const { user_id } = currentUser(req);
-  const profiles = readBehaviorProfiles();
-  const profile = profiles[user_id];
-  const history = readStatementTransactions().filter(t => t.user_id === user_id);
-
-  const assessment = evaluatePersonalizedRiskLogic(
-    profile || null,
-    history,
-    parseFloat(amount) || 0,
-    merchant || "",
-    timestamp || new Date().toISOString(),
-    upi_id || null,
-    location || null
-  );
-
-  res.json({
-    user_id,
-    ...assessment
-  });
-});
 
 // POST Upload Statement (PDF/CSV)
+// Statement parsing lives in the Python service, which has pdfplumber and the
+// four extraction strategies. Express used to parse CSV itself and forward
+// only PDFs, which is how the two backends ended up with different profiles
+// for the same user.
 app.post(
   ["/statement/upload", "/api/statement/upload"],
   requireAuth,
   upload.single("file"),
-  async (req, res) => {
-  // The statement belongs to whoever uploaded it. Any user_id in the form
-  // body is ignored so one account cannot write into another's history.
-  const { user_id } = currentUser(req);
-  const retain_source = req.body.retain_source === "true";
-  const file = req.file;
-
-  if (!file) {
-    return res.status(400).json({ error: "No statement file uploaded" });
-  }
-
-  const filename = file.originalname || "statement.csv";
-  const content = file.buffer;
-  const ext = path.extname(filename).toLowerCase();
-
-  let parsedTxs: any[] = [];
-  let source_type = "csv";
-  let warnings: string[] = [];
-
-  if (ext === ".csv") {
-    // Robust CSV parser
-    try {
-      const text = content.toString("utf-8").replace(/^\uFEFF/, "");
-      const lines = text.split(/\r?\n/);
-      if (lines.length > 1) {
-        const headers = splitCsvRow(lines[0]).map(h => h.trim().toLowerCase());
-        for (let i = 1; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (!line) continue;
-          const values = splitCsvRow(line);
-          const tx: any = {};
-
-          headers.forEach((header, idx) => {
-            tx[header] = values[idx] || "";
-          });
-
-          // Debit and credit mean opposite things. Folding a credit into the
-          // spending baseline inflates avg_amount and max_amount, which drive
-          // the highest-weighted rule in the risk engine.
-          const num = (v: any) => {
-            const n = parseFloat(String(v ?? "").replace(/[^0-9.\-]/g, ""));
-            return Number.isFinite(n) ? n : 0;
-          };
-          let amountVal = num(tx.debit || tx.withdrawal);
-          let txnType = "DEBIT";
-          if (!amountVal) {
-            const credit = num(tx.credit || tx.deposit);
-            if (credit) { amountVal = credit; txnType = "CREDIT"; }
-          }
-          if (!amountVal) amountVal = num(tx.amount || tx.transaction_amount);
-
-          const marker = String(tx.type || tx.txn_type || tx.transaction_type || tx.dr_cr || "").trim().toUpperCase();
-          if (marker.startsWith("CR")) txnType = "CREDIT";
-          else if (marker.startsWith("DR") || marker.startsWith("DEBIT")) txnType = "DEBIT";
-
-          let dateVal = tx.date || tx.timestamp || tx.datetime || new Date().toISOString().split("T")[0];
-          
-          // Convert DD/MM/YYYY or MM/DD/YYYY to YYYY-MM-DD
-          if (dateVal.includes("/")) {
-            const parts = dateVal.split("/");
-            if (parts.length === 3 && parts[2].length === 4) {
-              // Assume DD/MM/YYYY
-              dateVal = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
-            }
-          } else if (dateVal.includes("-") && dateVal.split("-")[0].length !== 4) {
-             const parts = dateVal.split("-");
-             if (parts.length === 3 && parts[2].length === 4) {
-               dateVal = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
-             }
-          }
-          
-          let timeVal = tx.time || "12:00";
-          // Add seconds if missing to make it valid ISO
-          if (timeVal.split(":").length === 2) {
-             timeVal += ":00";
-          }
-          const timestamp = `${dateVal}T${timeVal}`;
-          const merchantVal = tx.merchant || tx.payee || tx.description || tx.narration || tx.particulars || "UNKNOWN_MERCHANT";
-
-          if (amountVal <= 0 || looksLikeHeader(merchantVal)) continue;
-
-          parsedTxs.push({
-            timestamp,
-            amount: amountVal,
-            merchant: merchantVal,
-            upi_id: tx.upi_id || tx.upi || tx.vpa || "",
-            status: (tx.status || "SUCCESS").toUpperCase(),
-            reference_number: tx.reference_number || tx.reference || tx.utr || tx.txn_id || "",
-            txn_type: txnType,
-            raw_line: line
-          });
-        }
-      }
-    } catch (err) {
-      return res.status(400).json({ error: "Failed to parse CSV statement" });
-    }
-  } else if (ext === ".pdf") {
-    source_type = "pdf";
-    try {
-      // Delegate PDF parsing to the Python backend which uses pdfplumber
-      // for robust multi-format extraction (GPay, PhonePe, Paytm, bank statements, etc.)
-      console.log("[PDF] Delegating to Python backend for parsing...");
-      
-      const FormData = (await import("form-data")).default;
-      const formData = new FormData();
-      formData.append("user_id", user_id);
-      formData.append("retain_source", String(retain_source));
-      formData.append("file", content, { filename, contentType: "application/pdf" });
-
-      const http = await import("http");
-      
-      const backendResult: any = await new Promise((resolve, reject) => {
-        const options = {
-          hostname: "127.0.0.1",
-          port: 8000,
-          path: "/statement/upload",
-          method: "POST",
-          headers: formData.getHeaders(),
-        };
-
-        const backendReq = http.request(options, (backendRes: any) => {
-          let body = "";
-          backendRes.on("data", (chunk: string) => { body += chunk; });
-          backendRes.on("end", () => {
-            try {
-              const parsed = JSON.parse(body);
-              if (backendRes.statusCode >= 400) {
-                reject(new Error(parsed.detail || parsed.error || "Python backend returned an error"));
-              } else {
-                resolve(parsed);
-              }
-            } catch {
-              reject(new Error(`Python backend returned invalid JSON: ${body.substring(0, 200)}`));
-            }
-          });
-        });
-
-        backendReq.on("error", (err: Error) => {
-          reject(new Error(`Could not reach Python backend at localhost:8000: ${err.message}. Make sure 'python backend/main.py' is running.`));
-        });
-
-        formData.pipe(backendReq);
-      });
-
-      // Sync Python backend result with Express data stores
-      if (backendResult && backendResult.profile) {
-        saveBehaviorProfile(user_id, backendResult.profile);
-      }
-      
-      if (backendResult && backendResult.statement_id) {
-        const txs = backendResult.extracted_transactions || backendResult.profile?.transactions || [];
-        if (txs.length > 0) {
-          const statementRecords: StatementTransaction[] = txs.map((tx: any) => ({
-            statement_id: backendResult.statement_id,
-            user_id,
-            timestamp: tx.timestamp || new Date().toISOString(),
-            amount: parseFloat(tx.amount) || 0,
-            merchant: tx.merchant || "UNKNOWN",
-            upi_id: tx.upi_id || "",
-            status: tx.status || "SUCCESS",
-            reference_number: tx.reference_number || "",
-            txn_type: String(tx.txn_type || "DEBIT").toUpperCase(),
-            source_type: backendResult.source_type || "pdf",
-            raw_line: tx.raw_line || "",
-            created_at: new Date().toISOString()
-          }));
-          saveStatementTransactions(statementRecords);
-        }
-      }
-
-      // The Python backend already saved transactions and built a profile.
-      // Return its response directly.
-      console.log(`[PDF] Python backend extracted ${backendResult.transactions_extracted || 0} transactions`);
-      return res.json(backendResult);
-
-    } catch(err: any) {
-      console.error("[PDF] Python backend delegation failed:", err.message);
-      return res.status(400).json({ error: "Failed to parse PDF", details: err.message });
-    }
-  } else {
-    return res.status(400).json({ error: "Unsupported file type. Upload a PDF or CSV statement." });
-  }
-
-  if (parsedTxs.length > MAX_STATEMENT_UPLOAD_ROWS) {
-    warnings.push(
-      `Statement truncated to the first ${MAX_STATEMENT_UPLOAD_ROWS} transactions.`
-    );
-    parsedTxs = parsedTxs.slice(0, MAX_STATEMENT_UPLOAD_ROWS);
-  }
-
-  if (parsedTxs.length === 0) {
-    return res.json({
-      user_id,
-      statement_id: null,
-      source_type,
-      transactions_extracted: 0,
-      warnings,
-      profile_created: false
-    });
-  }
-
-  const statement_id = `stmt_${crypto.randomBytes(4).toString("hex")}`;
-  
-  // Save statement transactions
-  const statementRecords: StatementTransaction[] = parsedTxs.map(tx => ({
-    statement_id,
-    user_id,
-    timestamp: tx.timestamp,
-    amount: tx.amount,
-    merchant: tx.merchant,
-    upi_id: tx.upi_id,
-    status: tx.status,
-    reference_number: tx.reference_number,
-    txn_type: String(tx.txn_type || "DEBIT").toUpperCase(),
-    source_type,
-    raw_line: tx.raw_line,
-    created_at: new Date().toISOString()
-  }));
-
-  const insertedCount = saveStatementTransactions(statementRecords);
-  if (insertedCount < statementRecords.length) {
-    warnings.push(
-      `${statementRecords.length - insertedCount} transactions were already in your history and were skipped.`
-    );
-  }
-
-  // Generate Profile
-  const userTxs = readStatementTransactions().filter(t => t.user_id === user_id);
-  const profile = generateBehaviorProfileLogic(user_id, userTxs, source_type);
-  saveBehaviorProfile(user_id, profile);
-
-  if (retain_source) {
-    const uploadPathDir = path.join(DATA_DIR, "uploaded_statements");
-    if (!fs.existsSync(uploadPathDir)) {
-      fs.mkdirSync(uploadPathDir, { recursive: true });
-    }
-    const outputName = `${user_id}_${statement_id}_${filename}`;
-    fs.writeFileSync(path.join(uploadPathDir, outputName), content);
-  }
-
-  res.json({
-    user_id,
-    statement_id,
-    source_type,
-    transactions_extracted: insertedCount,
-    duplicates_skipped: parsedTxs.length - insertedCount,
-    warnings,
-    profile_created: true,
-    profile
-  });
-});
-
-// -----------------------------------------------------------------------------
-// ANALYTICS & ASSESSMENT ENGINES
-// -----------------------------------------------------------------------------
-
-function generateBehaviorProfileLogic(userId: string, txs: StatementTransaction[], sourceType: string): BehaviorProfile {
-  const transaction_count = txs.length;
-  if (transaction_count === 0) {
-    return {
-      user_id: userId,
-      transaction_count: 0,
-      debit_count: 0,
-      credit_count: 0,
-      avg_amount: 0,
-      max_amount: 0,
-      min_amount: 0,
-      most_active_hour: null,
-      night_transactions: 0,
-      weekend_transactions: 0,
-      transactions_without_time: 0,
-      favorite_merchants: [],
-      average_daily_transactions: 0,
-      failed_transactions: 0,
-      known_upi_ids: [],
-      merchant_frequency: {},
-      hourly_distribution: {},
-      monthly_totals: {},
-      source_type: sourceType,
-      updated_at: new Date().toISOString()
-    };
-  }
-
-  // Spending behaviour is money going OUT. Credits are counted, but they must
-  // not move the amount baseline the risk engine compares against.
-  const isDebit = (t: StatementTransaction) => (t.txn_type || "DEBIT").toUpperCase() !== "CREDIT";
-  const debits = txs.filter(isDebit);
-  const spend = debits.length > 0 ? debits : txs;
-
-  const amounts = spend.map(t => t.amount);
-  const avg_amount = parseFloat((amounts.reduce((sum, val) => sum + val, 0) / amounts.length).toFixed(2));
-  const max_amount = Math.max(...amounts);
-  const min_amount = Math.min(...amounts);
-
-  // Hourly profile & distributions
-  const hourly_distribution: Record<string, number> = {};
-  let transactions_without_time = 0;
-  let night_transactions = 0;
-  let weekend_transactions = 0;
-  const merchant_frequency: Record<string, number> = {};
-  const monthly_totals: Record<string, number> = {};
-  const upi_ids_set = new Set<string>();
-  let failed_transactions = 0;
-
-  txs.forEach(t => {
-    if (["FAILED", "FAILURE", "DECLINED"].includes(t.status)) {
-      failed_transactions++;
-    }
-    if (t.upi_id) {
-      upi_ids_set.add(t.upi_id);
-    }
-    if (t.merchant && isDebit(t)) {
-      merchant_frequency[t.merchant] = (merchant_frequency[t.merchant] || 0) + 1;
-    }
-
-    try {
-      const date = new Date(t.timestamp);
-      if (isNaN(date.getTime())) return;
-
-      // A statement giving only a date parses to exactly midnight. Counting
-      // those as 00:00 payments marked all of them night transactions and
-      // pinned most_active_hour to 0, so hour statistics skip them.
-      const hour = date.getHours();
-      const timeKnown = !(hour === 0 && date.getMinutes() === 0 && date.getSeconds() === 0);
-
-      if (timeKnown) {
-        hourly_distribution[hour.toString()] = (hourly_distribution[hour.toString()] || 0) + 1;
-        if (hour < 6 || hour >= 22) {
-          night_transactions++;
-        }
-      } else {
-        transactions_without_time++;
-      }
-
-      const day = date.getDay();
-      if (day === 0 || day === 6) {
-        weekend_transactions++;
-      }
-
-      // Monthly aggregates (spending only)
-      if (isDebit(t)) {
-        const yearMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-        monthly_totals[yearMonth] = (monthly_totals[yearMonth] || 0) + t.amount;
-      }
-    } catch {}
-  });
-
-  // Calculate most active hour
-  let most_active_hour: number | null = null;
-  let maxHourCount = 0;
-  Object.keys(hourly_distribution).forEach(h => {
-    if (hourly_distribution[h] > maxHourCount) {
-      maxHourCount = hourly_distribution[h];
-      most_active_hour = parseInt(h);
-    }
-  });
-
-  // Favorite merchants
-  const favorite_merchants = Object.keys(merchant_frequency)
-    .sort((a, b) => merchant_frequency[b] - merchant_frequency[a])
-    .slice(0, 5);
-
-  // Avg daily transactions (group by date)
-  const dateCounts: Record<string, number> = {};
-  txs.forEach(t => {
-    try {
-      const dateStr = new Date(t.timestamp).toISOString().split("T")[0];
-      dateCounts[dateStr] = (dateCounts[dateStr] || 0) + 1;
-    } catch {}
-  });
-  const uniqueDays = Object.keys(dateCounts).length;
-  const average_daily_transactions = parseFloat((transaction_count / (uniqueDays || 1)).toFixed(2));
-
-  return {
-    user_id: userId,
-    transaction_count,
-    debit_count: debits.length,
-    credit_count: transaction_count - debits.length,
-    avg_amount,
-    max_amount,
-    min_amount,
-    most_active_hour,
-    night_transactions,
-    weekend_transactions,
-    transactions_without_time,
-    favorite_merchants,
-    average_daily_transactions,
-    failed_transactions,
-    known_upi_ids: Array.from(upi_ids_set),
-    merchant_frequency,
-    hourly_distribution,
-    monthly_totals,
-    source_type: sourceType,
-    updated_at: new Date().toISOString()
-  };
-}
-
-function evaluatePersonalizedRiskLogic(
-  profile: BehaviorProfile | null,
-  history: StatementTransaction[],
-  amount: number,
-  merchant: string,
-  timestamp: string,
-  upi_id: string | null,
-  location: string | null
-): any {
-  let event_time = new Date();
-  try {
-    event_time = new Date(timestamp);
-  } catch {}
-
-  if (!profile || profile.transaction_count === 0) {
-    const baseline_risk = amount > 10000 ? 35 : 20;
-    return {
-      risk_score: baseline_risk,
-      risk_level: baseline_risk >= 80 ? "HIGH" : baseline_risk >= 50 ? "MEDIUM" : "LOW",
-      reasons: [
-        "No historical behavior profile found for this user",
-        "Upload past UPI or bank statements to enable personalized checks"
-      ],
-      comparison: {},
-      profile_available: false,
-      timestamp: event_time.toISOString(),
-      merchant,
-      location
-    };
-  }
-
-  const avg_amount = profile.avg_amount;
-  const max_amount = profile.max_amount;
-  const favorite_merchants = new Set(profile.favorite_merchants);
-  const known_upi_ids = new Set(profile.known_upi_ids);
-  const most_active_hour = profile.most_active_hour;
-  const avg_daily_transactions = profile.average_daily_transactions;
-
-  let score = 5;
-  const reasons: string[] = [];
-  const comparison: any = {
-    average_amount: avg_amount,
-    max_amount: max_amount,
-    most_active_hour: most_active_hour,
-    average_daily_transactions: avg_daily_transactions
-  };
-
-  if (avg_amount > 0) {
-    const amount_multiple = parseFloat((amount / avg_amount).toFixed(2));
-    comparison.amount_multiple = amount_multiple;
-
-    if (amount_multiple >= 15) {
-      score += 35;
-      reasons.push(`Amount is ${amount_multiple}x higher than the user's average payment`);
-    } else if (amount_multiple >= 8) {
-      score += 24;
-      reasons.push(`Amount is ${amount_multiple}x above the usual pattern`);
-    } else if (amount_multiple >= 3) {
-      score += 12;
-      reasons.push(`Amount is materially above the user's average transaction size`);
-    }
-  }
-
-  if (max_amount > 0 && amount > max_amount) {
-    score += 15;
-    reasons.push("Amount is higher than any previously seen transaction in the uploaded statements");
-  }
-
-  const merchantKey = merchant.trim();
-  const seenInHistory = history.some(t => t.merchant.toLowerCase() === merchantKey.toLowerCase());
-  if (!favorite_merchants.has(merchantKey) && !seenInHistory) {
-    score += 20;
-    reasons.push("Merchant has not appeared in the user's historical statement profile");
-  }
-
-  if (upi_id && !known_upi_ids.has(upi_id)) {
-    score += 12;
-    reasons.push("UPI ID is new for this user");
-  }
-
-  const hour = event_time.getHours();
-  if (hour < 6 || hour >= 22) {
-    score += 12;
-    reasons.push("Transaction time falls in the user's higher-risk night window");
-  }
-
-  if (most_active_hour !== null && Math.abs(hour - most_active_hour) >= 8) {
-    score += 8;
-    reasons.push("Transaction time is far from the user's most active payment hour");
-  }
-
-  // Same-day activity velocity count
-  const eventDateStr = event_time.toISOString().split("T")[0];
-  const sameDayTxs = history.filter(t => {
-    try {
-      return new Date(t.timestamp).toISOString().split("T")[0] === eventDateStr;
-    } catch {
-      return false;
-    }
-  });
-  const daily_velocity = sameDayTxs.length + 1;
-  comparison.projected_daily_transactions = daily_velocity;
-
-  if (avg_daily_transactions > 0 && daily_velocity > Math.max(avg_daily_transactions * 3, avg_daily_transactions + 6)) {
-    score += 18;
-    reasons.push("Transaction velocity is unusually high compared with the user's normal daily activity");
-  }
-
-  const failed_ratio = profile.failed_transactions / (profile.transaction_count || 1);
-  if (failed_ratio > 0.2) {
-    score += 5;
-    reasons.push("Historical statement profile already contains a high failed transaction ratio");
-  }
-
-  const final_score = Math.min(99, Math.round(score));
-
-  if (reasons.length === 0) {
-    reasons.push("Payment fits the user's historical amount, merchant, and timing patterns");
-  }
-
-  return {
-    risk_score: final_score,
-    risk_level: final_score >= 80 ? "HIGH" : final_score >= 50 ? "MEDIUM" : "LOW",
-    reasons,
-    comparison,
-    profile_available: true,
-    timestamp: event_time.toISOString(),
-    merchant,
-    location
-  };
-}
-
-// -----------------------------------------------------------------------------
-// VITE DEV SERVER & STATIC ASSETS SETUP
-// -----------------------------------------------------------------------------
-
-// -----------------------------------------------------------------------------
-// PRE-PAYMENT PAYEE CHECK (proxied to the Python service)
-// -----------------------------------------------------------------------------
+  (req, res) => proxyUpload(req, res, "/statement/upload")
+);
 
 app.post(["/payee/check", "/api/payee/check"], requireAuth, (req, res) =>
   proxyToPython(req, res, "/payee/check")
