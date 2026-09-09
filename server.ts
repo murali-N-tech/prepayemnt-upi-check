@@ -487,9 +487,19 @@ async function forwardJson(
 }
 
 /** Forwards a request, turning an unreachable backend into a clear message. */
-async function proxyToPython(req: Request, res: Response, path: string) {
+async function proxyToPython(
+  req: Request,
+  res: Response,
+  path: string,
+  method: "POST" | "GET" = "POST"
+) {
   try {
-    const { status, body } = await forwardJson(path, req.body, req.headers.authorization);
+    const { status, body } = await forwardJson(
+      path,
+      method === "POST" ? req.body : null,
+      req.headers.authorization,
+      method
+    );
     res.status(status).json(body);
   } catch (err: any) {
     res.status(503).json({
@@ -692,34 +702,17 @@ app.get(["/explain/:tx_id", "/api/explain/:tx_id"], requireAuth, (req, res) => {
 });
 
 // GET Fraud Graph Edges
-app.get(["/fraud-graph", "/api/fraud-graph"], requireAuth, (_req, res) => {
-  res.json({ edges: graphEdges });
-});
+app.get(["/fraud-graph", "/api/fraud-graph"], requireAuth, (req, res) =>
+  proxyToPython(req, res, "/fraud-graph", "GET")
+);
 
 // GET Fraud Rings
-app.get(["/fraud-rings", "/api/fraud-rings"], requireAuth, (_req, res) => {
-  // Group users connected to each merchant
-  const merchantToUsers: Record<string, Set<string>> = {};
-  graphEdges.forEach(edge => {
-    if (!merchantToUsers[edge.merchant]) {
-      merchantToUsers[edge.merchant] = new Set();
-    }
-    merchantToUsers[edge.merchant].add(edge.user);
-  });
-
-  const rings: any[] = [];
-  Object.keys(merchantToUsers).forEach(merchant => {
-    const users = Array.from(merchantToUsers[merchant]);
-    if (users.length >= 3) {
-      rings.push({
-        merchant,
-        users
-      });
-    }
-  });
-
-  res.json({ rings });
-});
+// Graph analysis lives in the Python service so there is one implementation.
+// The versions that used to be here walked every node and reported anything
+// with three or more neighbours, which on real data returns popular merchants.
+app.get(["/fraud-rings", "/api/fraud-rings"], requireAuth, (req, res) =>
+  proxyToPython(req, res, "/fraud-rings", "GET")
+);
 
 // GET Temporal Patterns (count fraud transactions by hour)
 app.get(["/temporal-patterns", "/api/temporal-patterns"], requireAuth, (_req, res) => {
@@ -779,16 +772,9 @@ app.get(["/model-drift", "/api/model-drift"], requireAuth, (_req, res) => {
 });
 
 // GET GNN Fraud Detection (suspicious nodes with degree >= 3)
-app.get(["/gnn-fraud-detection", "/api/gnn-fraud-detection"], requireAuth, (_req, res) => {
-  const degrees: Record<string, number> = {};
-  graphEdges.forEach(e => {
-    degrees[e.user] = (degrees[e.user] || 0) + 1;
-    degrees[e.merchant] = (degrees[e.merchant] || 0) + 1;
-  });
-
-  const suspicious_nodes = Object.keys(degrees).filter(node => degrees[node] >= 3);
-  res.json({ suspicious_nodes });
-});
+app.get(["/gnn-fraud-detection", "/api/gnn-fraud-detection"], requireAuth, (req, res) =>
+  proxyToPython(req, res, "/gnn-fraud-detection", "GET")
+);
 
 // GET Profile by user_id
 app.get(["/profiles/me", "/api/profiles/me"], requireAuth, (req, res) => {

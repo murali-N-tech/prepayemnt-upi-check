@@ -36,6 +36,7 @@ from backend.app.services.statement_parser import (
 from backend.app.services.personalized_risk_service import (
     evaluate_personalized_risk,
 )
+from backend.app.services.fraud_graph import detect_rings, graph_summary, load_edges
 from backend.app.services.payee_check import check_payee
 from backend.app.services.payee_reputation import record_payment, report_payee
 
@@ -337,10 +338,14 @@ def explain(tx_id: str):
 
 @app.get("/fraud-graph")
 def fraud_graph(user: str = Depends(get_current_user)):
-
-    edges = get_all_edges()
-
-    return {"edges": edges}
+    """The persisted payer -> payee graph, with payment counts on each edge."""
+    edges = load_edges()
+    return {
+        "edges": [
+            {"user": e.payer, "merchant": e.payee, "payments": e.payments}
+            for e in edges
+        ]
+    }
 
 
 # --------------------------------------------------
@@ -348,11 +353,27 @@ def fraud_graph(user: str = Depends(get_current_user)):
 # --------------------------------------------------
 
 @app.get("/fraud-rings")
-def fraud_rings():
+def fraud_rings(user: str = Depends(get_current_user)):
+    """Addresses that share a payer pool AND show the collection shape.
 
-    rings = detect_fraud_rings()
-
-    return {"rings": rings}
+    The previous implementation walked every node in an in-memory graph and
+    reported any with three or more neighbours, so it reported payers as
+    merchants and flagged every popular shop.
+    """
+    rings = detect_rings(load_edges())
+    return {
+        "rings": [
+            {
+                "merchant": r.payees[0],
+                "payees": r.payees,
+                "users": r.shared_payers,
+                "overlap": r.overlap,
+                "total_payments": r.total_payments,
+                "reason": r.reason,
+            }
+            for r in rings
+        ]
+    }
 
 
 # --------------------------------------------------
@@ -419,12 +440,25 @@ def model_drift(user: str = Depends(get_current_user)):
 
 @app.get("/gnn-fraud-detection")
 def gnn_detection(user: str = Depends(get_current_user)):
+    """Graph anomalies in the payer -> payee network.
 
-    edges = get_all_edges()
-
-    suspicious = gnn_risk(edges)
-
-    return {"suspicious_nodes": suspicious}
+    Kept at this path so the existing UI keeps working, but this is graph
+    analysis, not a graph neural network: nothing in this repository trains
+    one. Each result carries the reason it was returned, which the old
+    degree >= 3 rule could not do (it returned the most popular merchants).
+    """
+    summary = graph_summary()
+    return {
+        "method": "bipartite graph analysis",
+        "suspicious_nodes": [d["node"] for d in summary["suspicious"]],
+        "details": summary["suspicious"],
+        "graph": {
+            "payers": summary["payers"],
+            "payees": summary["payees"],
+            "edges": summary["edges"],
+            "components": summary["components"],
+        },
+    }
 
 
 # --------------------------------------------------

@@ -4,7 +4,11 @@ import { useAuth } from "../context/AuthContext";
 
 interface FraudRing {
   merchant: string;
+  payees?: string[];
   users: string[];
+  overlap?: number;
+  total_payments?: number;
+  reason?: string;
 }
 
 export default function FraudRings() {
@@ -54,7 +58,7 @@ export default function FraudRings() {
           <div>
             <h3 className="text-lg font-semibold text-white">No Active Fraud Rings Detected</h3>
             <p className="text-slate-300 text-sm mt-1">
-              All payment endpoints reflect singular, secure connections. No high-density user collusion networks are currently flagged in transaction histories.
+              No group of addresses is drawing on the same pool of payers. A ring is only reported when several addresses share most of their payers and almost nobody pays any of them twice - a household paying the same local shops does not qualify.
             </p>
           </div>
         </div>
@@ -75,21 +79,31 @@ export default function FraudRings() {
                     <ShieldAlert className="h-6 w-6" />
                   </div>
                   <span className="text-xs font-semibold px-2.5 py-1 bg-rose-500/15 text-rose-400 rounded-full border border-rose-500/30">
-                    Density Trigger
+                    {ring.overlap !== undefined ? `${Math.round(ring.overlap * 100)}% shared payers` : "Shared payer pool"}
                   </span>
                 </div>
 
                 <div className="space-y-1">
-                  <span className="text-xs text-slate-500 font-semibold uppercase block">Merchant Node</span>
-                  <div className="flex items-center gap-1.5 text-lg font-bold text-white">
-                    <Landmark className="h-4 w-4 text-rose-400" />
-                    {ring.merchant}
-                  </div>
+                  <span className="text-xs text-slate-500 font-semibold uppercase block">
+                    Addresses in this group ({(ring.payees ?? [ring.merchant]).length})
+                  </span>
+                  {(ring.payees ?? [ring.merchant]).map((payee) => (
+                    <div key={payee} className="flex items-center gap-1.5 text-sm font-bold text-white">
+                      <Landmark className="h-4 w-4 text-rose-400 shrink-0" />
+                      <span className="font-mono truncate">{payee}</span>
+                    </div>
+                  ))}
                 </div>
+
+                {ring.reason && (
+                  <p className="mt-4 text-xs text-slate-400 bg-slate-950 border border-slate-800 rounded-lg p-3">
+                    {ring.reason}
+                  </p>
+                )}
 
                 {/* Users List */}
                 <div className="mt-6 space-y-2">
-                  <span className="text-xs text-slate-500 font-semibold uppercase block">Associated Accounts ({ring.users.length})</span>
+                  <span className="text-xs text-slate-500 font-semibold uppercase block">Shared payers ({ring.users.length})</span>
                   <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
                     {ring.users.map((user, uidx) => (
                       <div key={uidx} className="flex items-center gap-2 p-2 bg-slate-950 rounded border border-slate-900/50 text-xs text-slate-300">
