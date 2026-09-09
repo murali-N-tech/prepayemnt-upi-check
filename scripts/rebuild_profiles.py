@@ -52,11 +52,18 @@ COLUMNS = (
 
 
 def _open(path: Path) -> sqlite3.Connection:
-    if path == DB_PATH and not path.exists():
-        return _get_connection()
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Open a database, applying the schema migrations first.
+
+    Opening a --db copy with a plain sqlite3.connect skipped _ensure_schema,
+    so a column added since that copy was taken was simply missing and the
+    stage failed. Route everything through the same setup the app uses.
+    """
+    import backend.app.services.profile_store as store
+
+    store.DB_PATH = path
+    store.DATA_DIR = path.parent
+    store._SCHEMA_DONE.discard(str(path.resolve()))
+    return store._get_connection()
 
 
 def stage_compact(conn: sqlite3.Connection, max_rows: int) -> None:
@@ -211,6 +218,57 @@ def stage_junk(conn: sqlite3.Connection) -> None:
     print(f"  removed {len(junk):,} header / zero-amount rows")
 
 
+
+# The exact clock values older parsers wrote when a statement carried no time:
+# 00:00:00 from the CSV path, 12:00:00 from the PDF path.
+PLACEHOLDER_CLOCKS = ("00:00:00", "12:00:00")
+
+# A user's real payments never pile onto one exact second. Measured on this
+# data the largest genuine share is 3%, while every placeholder sits between
+# 33% and 100%, so anything at or above this is a parser artefact - and only
+# the two values above are ever eligible, so a genuine noon payment inside a
+# normal spread can never be marked.
+PLACEHOLDER_SHARE = 0.15
+
+
+def stage_fixtimes(conn: sqlite3.Connection) -> None:
+    """Mark parser placeholders as "no time recorded".
+
+    Stored, a placeholder is indistinguishable from a real payment at that
+    hour, so a statement with no times at all produced a confident "most
+    active hour" that was never in the data - 12:00, every time.
+    """
+    total_marked = 0
+    for (uid,) in conn.execute("SELECT DISTINCT user_id FROM statement_transactions"):
+        total = conn.execute(
+            "SELECT COUNT(*) FROM statement_transactions WHERE user_id = ?", (uid,)
+        ).fetchone()[0]
+        if not total:
+            continue
+
+        for clock in PLACEHOLDER_CLOCKS:
+            n = conn.execute(
+                "SELECT COUNT(*) FROM statement_transactions "
+                "WHERE user_id = ? AND substr(timestamp, 12, 8) = ?",
+                (uid, clock),
+            ).fetchone()[0]
+            share = n / total
+            if n < 5 or share < PLACEHOLDER_SHARE:
+                continue
+            with conn:
+                conn.execute(
+                    "UPDATE statement_transactions SET time_known = 0 "
+                    "WHERE user_id = ? AND substr(timestamp, 12, 8) = ?",
+                    (uid, clock),
+                )
+            total_marked += n
+            print(f"    {uid:24} {n:>6} of {total:>6} at {clock} ({share:.0%}) "
+                  f"-> no time recorded")
+
+    print(f"    {total_marked:,} rows marked" if total_marked
+          else "    no placeholder clock times found")
+
+
 def stage_reparse(conn: sqlite3.Connection) -> None:
     """Re-derive rows from retained source files, which is the only way to fix
     timestamps the old parser corrupted."""
@@ -306,8 +364,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "stage",
-        choices=["report", "compact", "truncate", "dedupe", "junk", "reparse",
-                 "profiles", "vacuum", "all"],
+        choices=["report", "compact", "truncate", "dedupe", "junk", "fixtimes",
+                 "reparse", "profiles", "vacuum", "all"],
     )
     ap.add_argument("--max-rows", type=int, default=20_000)
     ap.add_argument("--db", help="operate on this database file instead of the default")
@@ -326,7 +384,9 @@ def main() -> int:
 
     conn = _open(DB_PATH)
     stages = (
-        ["compact", "junk", "reparse", "profiles"] if args.stage == "all" else [args.stage]
+        ["compact", "junk", "fixtimes", "reparse", "profiles"]
+        if args.stage == "all"
+        else [args.stage]
     )
     for name in stages:
         print(f"\n[{name}]")
@@ -340,6 +400,8 @@ def main() -> int:
             stage_dedupe(conn)
         elif name == "junk":
             stage_junk(conn)
+        elif name == "fixtimes":
+            stage_fixtimes(conn)
         elif name == "reparse":
             stage_reparse(conn)
         elif name == "profiles":

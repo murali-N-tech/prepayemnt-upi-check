@@ -197,6 +197,20 @@ export default function UserProfile() {
         </p>
       </div>
 
+      {profile && (profile.transactions_without_time ?? 0) > 0 && (
+        <div className="bg-amber-500/10 border border-amber-500/20 text-amber-300 text-sm rounded-lg p-4 flex items-start gap-3">
+          <Clock className="h-5 w-5 shrink-0 mt-0.5" />
+          <span>
+            {profile.transactions_without_time} of {profile.transaction_count} transactions
+            in your statement carry a date but no time of day
+            {profile.most_active_hour === null || profile.most_active_hour === undefined
+              ? ", so the hourly charts and the night-time risk rule have nothing to read"
+              : ", so the hourly charts are based on the rest"}
+            . A statement that includes transaction times gives a sharper profile.
+          </span>
+        </div>
+      )}
+
       {/* ── Metrics Strip ── */}
       {profile && (
         <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-4" id="metrics-grid">
@@ -233,9 +247,15 @@ export default function UserProfile() {
               <Clock className="h-4 w-4 text-amber-400" />
             </div>
             <div className="text-2xl font-bold text-white">
-              {profile.most_active_hour !== null ? `${profile.most_active_hour}:00` : "-"}
+              {profile.most_active_hour !== null && profile.most_active_hour !== undefined
+                ? `${String(profile.most_active_hour).padStart(2, "0")}:00`
+                : "Not in statement"}
             </div>
-            <div className="text-xs text-slate-500 mt-1">Most recurring</div>
+            <div className="text-xs text-slate-500 mt-1">
+              {profile.most_active_hour !== null && profile.most_active_hour !== undefined
+                ? "Most recurring"
+                : "No transaction times to read"}
+            </div>
           </div>
 
           <div className="bg-gradient-to-br from-emerald-600/10 to-slate-900 border border-emerald-500/20 rounded-xl p-4 hidden xl:block">

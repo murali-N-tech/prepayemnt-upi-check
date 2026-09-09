@@ -58,6 +58,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             source_type TEXT,
             raw_line TEXT,
             txn_type TEXT NOT NULL DEFAULT 'DEBIT',
+            time_known INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL
         )
         """
@@ -67,6 +68,14 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     if "txn_type" not in columns:
         conn.execute(
             "ALTER TABLE statement_transactions ADD COLUMN txn_type TEXT NOT NULL DEFAULT 'DEBIT'"
+        )
+    if "time_known" not in columns:
+        # Whether the statement actually carried a clock time. Without it a
+        # parser placeholder is indistinguishable from a real payment at that
+        # hour, and the profile reports a confident "most active hour" that
+        # was never in the data.
+        conn.execute(
+            "ALTER TABLE statement_transactions ADD COLUMN time_known INTEGER NOT NULL DEFAULT 1"
         )
     conn.execute(
         """
@@ -144,8 +153,9 @@ def save_statement_transactions(
                 source_type,
                 raw_line,
                 txn_type,
+                time_known,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -160,6 +170,7 @@ def save_statement_transactions(
                     source_type,
                     tx.get("raw_line"),
                     str(tx.get("txn_type") or "DEBIT").upper(),
+                    1 if tx.get("time_known", True) else 0,
                     created_at,
                 )
                 for tx in transactions
@@ -187,6 +198,7 @@ def get_user_transactions(user_id: str) -> pd.DataFrame:
             source_type,
             raw_line,
             txn_type,
+            time_known,
             created_at
         FROM statement_transactions
         WHERE user_id = ?

@@ -537,9 +537,18 @@ def _txn_to_dict(t: _Transaction) -> dict[str, Any] | None:
     # and night_transactions meaningless for PDF-sourced profiles.
     date_part = t.date or datetime.utcnow().strftime("%Y-%m-%d")
     timestamp = date_part
+    time_known = True
     if len(date_part) == 10 and "T" not in date_part:
         clock = _parse_clock(t.time_str)
-        timestamp = f"{date_part}T{clock}" if clock else f"{date_part}T12:00:00"
+        if clock:
+            timestamp = f"{date_part}T{clock}"
+        else:
+            # No clock time in the statement. Earlier versions wrote 12:00:00
+            # here, which is indistinguishable from a real midday payment - so
+            # a statement with no times at all reported "most active hour:
+            # 12:00" with total confidence. Record the absence instead.
+            timestamp = f"{date_part}T00:00:00"
+            time_known = False
 
     return {
         "timestamp": _normalize_timestamp(timestamp),
@@ -550,6 +559,7 @@ def _txn_to_dict(t: _Transaction) -> dict[str, Any] | None:
         "reference_number": t.upi_ref,
         "raw_line": t.raw_line,
         "txn_type": t.txn_type or txn_type,
+        "time_known": time_known,
     }
 
 
@@ -844,6 +854,7 @@ def _parse_csv_statement(content: bytes) -> list[dict[str, Any]]:
         records.append(
             {
                 "timestamp": _normalize_timestamp(raw_timestamp),
+                "time_known": bool(_clean_optional(time_value)),
                 "amount": _normalize_amount(amount_value),
                 "merchant": merchant_text,
                 "upi_id": _clean_optional(upi_id),
@@ -1434,9 +1445,17 @@ def generate_behavior_profile(transactions: list[dict[str, Any]]) -> dict[str, A
     # transaction and pinned most_active_hour to 0, so hour-based statistics
     # use only the rows that carry a real clock time.
     ts = dated["timestamp"]
-    midnight = (ts.dt.hour == 0) & (ts.dt.minute == 0) & (ts.dt.second == 0)
-    timed = dated.loc[~midnight]
-    undated_time = int(midnight.sum())
+    if "time_known" in dated.columns:
+        # Explicit flag from the parser.
+        known = dated["time_known"].fillna(1).astype(bool)
+    else:
+        # Rows written before the flag existed. Both sentinels the old parsers
+        # used are treated as "no time": exact midnight from the CSV path, and
+        # exact noon from the PDF path.
+        exact = (ts.dt.minute == 0) & (ts.dt.second == 0)
+        known = ~(exact & ts.dt.hour.isin([0, 12]))
+    timed = dated.loc[known]
+    undated_time = int((~known).sum())
 
     if dated.empty:
         most_active_hour = None
