@@ -182,23 +182,68 @@ there is exactly one implementation of it.
 Being precise about this matters more than a headline accuracy number.
 
 **Rules and graph analysis** — the payee check and the personalized risk
-engine are explicit, inspectable rules with named thresholds. Every finding
-carries the reason it fired. This is a deliberate choice: a fraud decision a
-user cannot be told the reason for is not much use to them.
+engine are explicit, inspectable rules with named thresholds, and every
+finding carries the reason it fired. A fraud decision the user cannot be told
+the reason for is not much use to them.
 
-**Machine learning** — `backend/train_model.py` fits an Isolation Forest and
-a Logistic Regression, but **on synthetic data with rule-derived labels**, so
-the classifier can only relearn the rule it was trained on. It is a
-placeholder, not a result, and no accuracy figure from it should be quoted.
-No public labelled UPI fraud dataset exists; training the classifier on a
-real labelled set (IEEE-CIS, PaySim) and reporting recall at a fixed
-false-positive rate is the next piece of work.
+**The classifier** — `backend/train_model.py` trains a calibrated model on
+`backend/ml/dataset.py` and writes `models/metrics.json`. Reproduce with:
 
----
+```bash
+python backend/train_model.py
+```
+
+| | ROC-AUC | PR-AUC | recall @ 1% FPR | precision |
+|---|---|---|---|---|
+| Logistic regression (baseline) | 0.9514 | 0.1794 | 24% | 23% |
+| Gradient boosting (selected) | 0.9824 | 0.6206 | 68% | 45% |
+
+ROC-AUC of 0.9824 next to PR-AUC of 0.6206 is the whole point. At a
+~1% fraud rate, accuracy and ROC-AUC flatter a model badly; a classifier that
+answers "legitimate" every time is 99% accurate and worthless. The operating
+threshold is not a round number — it is the point that satisfies a stated
+**1% false-positive budget**, because the cost of a fraud system is the good
+payments it blocks.
+
+Recall by scenario at that threshold:
+
+| scenario | recall |
+|---|---|
+| social engineering | 58% |
+| account takeover | 73% |
+| mule collection | 80% |
+| card testing | 96% |
+
+**The ablation** — the project claims that scoring the payer is not enough,
+because in social engineering the payer authorised the payment themselves and
+is behaving normally by definition. That is measured rather than asserted:
+
+| features the model can see | social-engineering recall |
+|---|---|
+| payer's own behaviour only | 36% |
+| payee signals only | 23% |
+| both | 58% |
+
+Neither half is sufficient and the combination is worth more than either.
+That is the argument for the payee check, in a number.
+
+**The data is simulated.** There is no public labelled UPI fraud dataset.
+`backend/ml/dataset.py` generates one where labels come from the generative
+process rather than from a rule over the features — the previous script
+labelled random numbers with `amount > 80000 | rolling_txn_count > 7 |
+time_gap < 50`, so its classifier could only relearn that rule. The scenarios
+are built to overlap with honest behaviour on purpose: real people do pay new
+payees and do make large transfers, and a generator without that overlap
+produces a separable problem and a meaningless 0.99 AUC.
+
+These figures describe the method, not field performance. To train on real
+data, produce a DataFrame with the columns in `backend/ml/dataset.FEATURES`
+plus `is_fraud` and pass it to `train()`.
 
 ## Known limitations
 
-- The classifier is trained on synthetic data (above).
+- The classifier is trained on simulated data (above), so its figures
+  demonstrate the method rather than field performance.
 - Express and FastAPI keep separate user stores, so a profile built from a
   CSV upload (Express, JSON) is not visible to the payee check's payer-side
   comparison (FastAPI, SQLite).

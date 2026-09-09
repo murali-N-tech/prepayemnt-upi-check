@@ -1,56 +1,43 @@
+"""Loads the trained risk model.
+
+This used to hand-roll an "ensemble" that averaged a LogisticRegression
+probability with an IsolationForest's +1/-1 output mapped to 0.8/0.2, over
+models fitted on random numbers. The weighting was arbitrary and the inputs
+carried no signal.
+
+The model is now a calibrated classifier trained and evaluated by
+backend/train_model.py, which writes models/metrics.json alongside it. If the
+file is missing, this raises with the command that produces it rather than
+silently loading something stale.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
 import joblib
-import numpy as np
 
-ISO_MODEL_PATH = "models/isolation_forest.pkl"
-LOG_MODEL_PATH = "models/logistic_model.pkl"
-
-
-class EnsembleModel:
-
-    def __init__(self):
-
-        self.iso_model = joblib.load(ISO_MODEL_PATH)
-        self.log_model = joblib.load(LOG_MODEL_PATH)
-
-    def predict_proba(self, X):
-
-        X = np.array(X)
-
-        amount = X[:, 0]
-        is_night = X[:, 1]
-        rolling_avg = X[:, 2]
-        rolling_txn = X[:, 3]
-        time_gap = X[:, 4]
-
-        iso_features = np.column_stack([
-            amount,
-            is_night,
-            rolling_avg
-        ])
-
-        log_features = np.column_stack([
-            amount,
-            is_night,
-            rolling_avg,
-            rolling_txn,
-            time_gap
-        ])
-
-        # Logistic Regression probability
-        log_prob = self.log_model.predict_proba(log_features)[:, 1]
-
-        # Isolation Forest anomaly prediction
-        iso_pred = self.iso_model.predict(iso_features)
-
-        # Convert anomaly output
-        iso_score = np.where(iso_pred == -1, 0.8, 0.2)
-
-        # Weighted ensemble
-        final_prob = (0.7 * log_prob) + (0.3 * iso_score)
-
-        return np.column_stack([1 - final_prob, final_prob])
+ROOT = Path(__file__).resolve().parents[2]
+MODEL_PATH = ROOT / "models" / "risk_model.pkl"
+METRICS_PATH = ROOT / "models" / "metrics.json"
 
 
-# IMPORTANT: This function MUST exist for main.py
 def load_model():
-    return EnsembleModel()
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f"{MODEL_PATH} is missing. Train it with:  python backend/train_model.py"
+        )
+    return joblib.load(MODEL_PATH)
+
+
+def load_metrics() -> dict[str, Any]:
+    """The model's measured performance, so the API can report what it is
+    rather than leaving the caller to assume."""
+    if not METRICS_PATH.exists():
+        return {}
+    try:
+        return json.loads(METRICS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}

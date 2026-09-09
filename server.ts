@@ -311,23 +311,8 @@ function readCsvTransactions(): TransactionRecord[] {
   }
 }
 
-// Helper to write CSV Transactions
-function writeCsvTransaction(tx: TransactionRecord) {
-  try {
-    const fileExists = fs.existsSync(DB_FILE);
-    const headers = ["transaction_id", "amount", "device_score", "location_score", "velocity_score", "sender", "receiver", "timestamp", "risk", "risk_score"];
-    let csvLine = `${tx.transaction_id},${tx.amount},${tx.device_score},${tx.location_score},${tx.velocity_score},${tx.sender},${tx.receiver},${tx.timestamp},${tx.risk},${tx.risk_score}\n`;
-    
-    if (!fileExists) {
-      const headerLine = headers.join(",") + "\n";
-      fs.writeFileSync(DB_FILE, headerLine + csvLine, "utf-8");
-    } else {
-      fs.appendFileSync(DB_FILE, csvLine, "utf-8");
-    }
-  } catch (err) {
-    console.error("Error writing transaction to CSV:", err);
-  }
-}
+// Transactions are written by the Python service, which owns /predict. Two
+// processes appending to the same CSV is how rows get lost.
 
 // Load and save statement transactions JSON
 function readStatementTransactions(): StatementTransaction[] {
@@ -554,109 +539,13 @@ app.get(["/transactions", "/api/transactions"], requireAuth, (req, res) => {
 });
 
 // POST Analyze / Predict Transaction
+// Scoring lives in the Python service, which owns the trained model. Express
+// used to run its own hardcoded rule ladder here, so the same transaction
+// scored differently depending on which backend answered.
 app.post(["/predict", "/api/predict"], requireAuth, (req, res) => {
-  const { amount, device_score, location_score, velocity_score, receiver, timestamp } = req.body ?? {};
-
-  const currentAmount = parseFloat(amount) || 0;
-  const devScore = parseFloat(device_score) || 0.5;
-  const locScore = parseFloat(location_score) || 0.5;
-  const velScore = parseFloat(velocity_score) || 1.0;
-  // The payer is whoever holds the token. Never trust a client-supplied id.
-  const txSender = currentUser(req).user_id;
-  const txReceiver = receiver ? String(receiver).trim() : "unknown_merchant";
-  const txTimestamp = timestamp || new Date().toISOString();
-
-  let is_night = 0;
-  try {
-    const hour = new Date(txTimestamp).getHours();
-    is_night = (hour < 6 || hour > 22) ? 1 : 0;
-  } catch {
-    is_night = 0;
-  }
-
-  // Rolling statistics over this payer's own recent transactions.
-  // These used to be computed and then thrown away; the two spike rules
-  // below are the same signals the Python model reads (rolling_avg_amount,
-  // rolling_txn_count, time_gap).
-  const myTxs = readCsvTransactions().filter((t) => t.sender === txSender);
-  let rolling_avg_amount = currentAmount;
-  let rolling_txn_count = 1;
-  let time_gap = 100;
-
-  if (myTxs.length > 0) {
-    const last5 = myTxs.slice(-5);
-    const sum = last5.reduce((acc, t) => acc + t.amount, 0);
-    rolling_avg_amount = sum / last5.length;
-    rolling_txn_count = last5.length;
-
-    const lastTxTime = new Date(myTxs[myTxs.length - 1].timestamp).getTime();
-    const currentTxTime = new Date(txTimestamp).getTime();
-    if (Number.isFinite(lastTxTime) && Number.isFinite(currentTxTime)) {
-      time_gap = Math.max(1, Math.floor((currentTxTime - lastTxTime) / 1000));
-    }
-  }
-
-  // Rule-based fallback engine. This is NOT a model: the FastAPI /predict
-  // endpoint is the model path. Keep the two in sync when either changes.
-  let base_prob = 0.15;
-  if (currentAmount > 10000) base_prob += 0.12;
-  if (currentAmount > 70000) base_prob += 0.35;
-  if (velScore > 5) base_prob += 0.20;
-  if (devScore > 0.7) base_prob += 0.08;
-  if (locScore > 0.7) base_prob += 0.08;
-  if (is_night === 1) base_prob += 0.10;
-
-  // Amount spike against this payer's own recent average.
-  if (rolling_txn_count > 1 && rolling_avg_amount > 0 && currentAmount > rolling_avg_amount * 5) {
-    base_prob += 0.15;
-  }
-  // Rapid-fire: another payment less than 30s after the previous one.
-  if (rolling_txn_count > 1 && time_gap < 30) {
-    base_prob += 0.10;
-  }
-
-  let risk_score = Math.floor(Math.min(0.95, Math.max(0.05, base_prob)) * 100);
-  let risk = (currentAmount > 70000 || velScore > 7 || risk_score >= 70) ? 1 : 0;
-
-  const tx_id = `tx_${Math.random().toString(36).substr(2, 6)}`;
-  const transactionData: TransactionRecord = {
-    transaction_id: tx_id,
-    amount: currentAmount,
-    device_score: devScore,
-    location_score: locScore,
-    velocity_score: velScore,
-    sender: txSender,
-    receiver: txReceiver,
-    timestamp: txTimestamp,
-    risk,
-    risk_score
-  };
-
-  // Persist
-  writeCsvTransaction(transactionData);
-
-  // Cache Edge
-  const edgeExists = graphEdges.some(e => e.user === txSender && e.merchant === txReceiver);
-  if (!edgeExists && txSender && txReceiver) {
-    graphEdges.push({ user: txSender, merchant: txReceiver });
-  }
-
-  // Build personalized profile risk check if profile is available
-  const profiles = readBehaviorProfiles();
-  const profile = profiles[txSender];
-  let personalized_assessment = null;
-
-  if (profile) {
-    const history = readStatementTransactions().filter(t => t.user_id === txSender);
-    personalized_assessment = evaluatePersonalizedRiskLogic(profile, history, currentAmount, txReceiver, txTimestamp, null, null);
-  }
-
-  res.json({
-    transaction_id: tx_id,
-    risk,
-    risk_score,
-    personalized_assessment
-  });
+  // The payer is whoever holds the token; never trust a client-supplied id.
+  req.body = { ...(req.body ?? {}), sender: currentUser(req).user_id };
+  return proxyToPython(req, res, "/predict");
 });
 
 // GET Heatmap coords
@@ -672,34 +561,11 @@ app.get(["/heatmap", "/api/heatmap"], requireAuth, (_req, res) => {
 });
 
 // GET SHAP Explainer
-app.get(["/explain/:tx_id", "/api/explain/:tx_id"], requireAuth, (req, res) => {
-  const { tx_id } = req.params;
-  const txs = readCsvTransactions();
-  const tx = txs.find(t => t.transaction_id === tx_id);
-
-  if (!tx) {
-    return res.status(404).json({ error: "Transaction Not Found" });
-  }
-
-  // Backwards compute relative shap weights based on values
-  const amtWeight = tx.amount > 50000 ? 0.35 : tx.amount > 10000 ? 0.15 : 0.02;
-  const nightWeight = (new Date(tx.timestamp).getHours() < 6 || new Date(tx.timestamp).getHours() >= 22) ? 0.12 : -0.05;
-  const velWeight = tx.velocity_score > 5 ? 0.25 : -0.05;
-  const locWeight = tx.location_score > 0.6 ? 0.10 : -0.02;
-  const devWeight = tx.device_score > 0.6 ? 0.10 : -0.02;
-
-  res.json({
-    transaction_id: tx_id,
-    features: ["amount", "is_night", "rolling_avg", "rolling_txn_count", "time_gap"],
-    shap_values: [[
-      amtWeight,
-      nightWeight,
-      velWeight * 0.5,
-      locWeight * 0.5,
-      devWeight * 0.5
-    ]]
-  });
-});
+app.get(["/explain/:tx_id", "/api/explain/:tx_id"], requireAuth, (req, res) =>
+  // Real SHAP values against a real background distribution, rather than the
+  // weights that used to be reverse-engineered from the score here.
+  proxyToPython(req, res, `/explain/${encodeURIComponent(req.params.tx_id)}`, "GET")
+);
 
 // GET Fraud Graph Edges
 app.get(["/fraud-graph", "/api/fraud-graph"], requireAuth, (req, res) =>

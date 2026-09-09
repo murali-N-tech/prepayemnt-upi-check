@@ -45,3 +45,9 @@ data/trust_store.json
 # OS files
 .DS_Store
 Thumbs.db
+
+# Trained model artifacts. Regenerate with: python backend/train_model.py
+# Committing binaries makes the repo heavy and lets a stale model outlive the
+# code that produced it. metrics.json IS committed - it is the evidence.
+models/*.pkl
+models/shap_background.json

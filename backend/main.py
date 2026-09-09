@@ -56,7 +56,10 @@ from backend.graph.graph_fraud_detector import (
 )
 
 # MODEL
-from backend.models.ensemble_model import load_model
+from backend.models.ensemble_model import load_metrics, load_model
+from backend.ml.dataset import FEATURES as MODEL_FEATURES
+from backend.ml.features import build_features, to_frame
+from backend.app.services.payee_reputation import assess_payee, payee_key
 
 # GNN
 from backend.advanced_ai.gnn_fraud_detector import gnn_risk
@@ -71,16 +74,40 @@ app = FastAPI()
 model = load_model()
 
 
-# --------------------------------------------------
-# SHAP Setup (FIXED)
-# --------------------------------------------------
+MODEL_METRICS = load_metrics()
 
-background_data = np.random.rand(50, 5)
+# The decision threshold is not a round number someone liked. It is the point
+# the training run chose to satisfy a stated false-positive budget, and it is
+# reported in models/metrics.json alongside the recall it buys.
+DECISION_THRESHOLD = float(
+    MODEL_METRICS.get("selected", {}).get("operating_point", {}).get("threshold", 0.5)
+)
+FPR_BUDGET = float(
+    MODEL_METRICS.get("selected", {}).get("operating_point", {}).get("fpr_budget", 0.01)
+)
+
+# --------------------------------------------------
+# SHAP
+# --------------------------------------------------
+# The background distribution must be real traffic. It used to be
+# np.random.rand(50, 5), which explains a prediction against noise: the
+# attributions were arithmetic, not explanation.
+
+_BACKGROUND_PATH = Path("models") / "shap_background.json"
+if _BACKGROUND_PATH.exists():
+    background_data = pd.read_json(_BACKGROUND_PATH, orient="split")[MODEL_FEATURES]
+else:  # pragma: no cover - only when the model has not been trained yet
+    raise FileNotFoundError(
+        f"{_BACKGROUND_PATH} is missing. Train the model with: python backend/train_model.py"
+    )
+
 
 def shap_predict(X):
-    return model.predict_proba(X)[:, 1]
+    frame = pd.DataFrame(X, columns=MODEL_FEATURES)
+    return model.predict_proba(frame)[:, 1]
 
-explainer = shap.Explainer(shap_predict, background_data)
+
+explainer = shap.Explainer(shap_predict, background_data.to_numpy())
 
 
 # --------------------------------------------------
@@ -204,26 +231,29 @@ def predict(tx: Transaction):
         except:
             time_gap = 100
 
-    # ML Features
-    features = [
-        tx.amount,
-        is_night,
-        rolling_avg_amount,
-        rolling_txn_count,
-        time_gap
-    ]
+    # The model is trained on these exact features (backend/ml/features.py is
+    # the single mapping, so training and serving cannot drift apart).
+    payer_profile = get_behavior_profile(tx.sender)
+    payee = assess_payee(payee_key(tx.receiver, tx.receiver))
 
-    prob = float(model.predict_proba([features])[0][1])
+    features = build_features(
+        amount=tx.amount,
+        timestamp=tx.timestamp,
+        profile=payer_profile,
+        reputation=payee.as_dict(),
+        seconds_since_last_txn=time_gap,
+        txns_last_hour=tx.velocity_score,
+        txns_today=rolling_txn_count,
+    )
 
-    # normalize probability
-    prob = max(0.05, min(prob, 0.95))
+    prob = float(model.predict_proba(to_frame(features))[0][1])
+    risk_score = int(round(prob * 100))
+    model_flag = prob >= DECISION_THRESHOLD
 
-    risk_score = int(prob * 100)
-
-    if tx.amount > 70000 or tx.velocity_score > 7:
-        risk = 1
-    else:
-        risk = 1 if risk_score >= 70 else 0
+    # The model decides. The two hard rules stay as a floor because a very
+    # large amount or an obvious velocity spike should never be waved through
+    # on a model's say-so.
+    risk = 1 if (model_flag or tx.amount > 70000 or tx.velocity_score > 7) else 0
 
     tx_id = f"tx_{uuid.uuid4().hex[:6]}"
 
@@ -260,6 +290,12 @@ def predict(tx: Transaction):
         "transaction_id": tx_id,
         "risk": risk,
         "risk_score": risk_score,
+        "probability": round(prob, 5),
+        "threshold": round(DECISION_THRESHOLD, 5),
+        "decided_by": "model" if model_flag else ("rule" if risk else "none"),
+        "model": MODEL_METRICS.get("selected", {}).get("model"),
+        "fpr_budget": FPR_BUDGET,
+        "features": features,
         "personalized_assessment": personalized_assessment
     }
 
@@ -294,41 +330,24 @@ def explain(tx_id: str):
     if tx is None:
         raise HTTPException(status_code=404, detail="Transaction Not Found")
 
-    df = get_all_transactions()
+    payer_profile = get_behavior_profile(tx.get("sender", ""))
+    payee = assess_payee(payee_key(tx.get("receiver", ""), tx.get("receiver", "")))
 
-    if df.empty:
-        rolling_avg = tx["amount"]
-        rolling_txn = 1
-        time_gap = 100
-        is_night = 0
-    else:
-        rolling_avg = df["amount"].tail(5).mean()
-        rolling_txn = len(df.tail(5))
-        time_gap = 100
-        is_night = 0
+    features = build_features(
+        amount=tx["amount"],
+        timestamp=tx.get("timestamp"),
+        profile=payer_profile,
+        reputation=payee.as_dict(),
+        txns_last_hour=tx.get("velocity_score", 0),
+    )
 
-    features = np.array([[
-
-        tx["amount"],
-        is_night,
-        rolling_avg,
-        rolling_txn,
-        time_gap
-
-    ]])
-
-    shap_values = explainer(features)
+    shap_values = explainer(to_frame(features).to_numpy())
 
     return {
         "transaction_id": tx_id,
-        "features": [
-            "amount",
-            "is_night",
-            "rolling_avg",
-            "rolling_txn_count",
-            "time_gap"
-        ],
-        "shap_values": shap_values.values.tolist()
+        "features": MODEL_FEATURES,
+        "shap_values": shap_values.values.tolist(),
+        "model": MODEL_METRICS.get("selected", {}).get("model"),
     }
 
 
