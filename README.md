@@ -109,12 +109,33 @@ pip install -r requirements.txt
 cp .env.example .env
 python -c "import secrets; print(secrets.token_hex(32))"   # paste into JWT_SECRET
 
-# 3. the Python service (PDF parsing + payee checks)
+# 3. train the model   <-- required once, on this machine
+python backend/train_model.py
+
+# 4. the Python service (PDF parsing, scoring, payee checks)
 python backend/main.py                      # http://127.0.0.1:8000
 
-# 4. the app
+# 5. the app
 npm run dev                                 # http://localhost:3001
 ```
+
+**Step 3 is not optional and cannot be skipped by copying a model file from
+somewhere else.** A scikit-learn pickle is tied to the numpy and scikit-learn
+versions that produced it, so a model trained on another machine fails to load
+with an error like `PCG64 is not a known BitGenerator module`. That is why
+`models/*.pkl` is gitignored and `models/metrics.json` (the evidence) is not.
+
+`GET /api/health` reports whether the model loaded, and which versions it was
+trained with:
+
+```json
+{ "status": "ok", "backend": "ok", "model": "ready",
+  "trained_with": { "numpy": "...", "scikit-learn": "..." } }
+```
+
+If the model is missing or unloadable the API still starts — everything except
+`/predict` and `/explain` keeps working, and those return 503 with the command
+to run.
 
 Open <http://localhost:3001>, create an account, and the **Check a Payee**
 page is the landing page.

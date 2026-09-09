@@ -262,8 +262,37 @@ app.get(["/", "/api"], (_req, res) => {
   res.json({ message: "Edge AI UPI Behaviour Risk System Running (Node.js)" });
 });
 
-app.get(["/health", "/api/health"], (_req, res) => {
-  res.json({ status: "ok" });
+// Health has to answer for both processes. Reporting "ok" from Express while
+// the Python service is down told the monitor everything was fine when
+// scoring, statement parsing and the payee check were all unavailable.
+app.get(["/health", "/api/health"], async (req, res) => {
+  try {
+    const upstream = await forwardJson("/health", null, req.headers.authorization, "GET");
+    const body = upstream.body ?? {};
+    // "ok" has to mean the system can actually do its job. Reporting ok while
+    // the model is unloadable is the same mistake as reporting ok while the
+    // backend is down.
+    const healthy = upstream.status === 200 && body.model === "ready";
+    res.json({
+      status: healthy ? "ok" : "degraded",
+      express: "ok",
+      backend: upstream.status === 200 ? "ok" : `error ${upstream.status}`,
+      model: body.model ?? "unknown",
+      model_detail: body.model_detail ?? null,
+      trained_with: body.trained_with ?? null,
+    });
+  } catch {
+    res.json({
+      status: "degraded",
+      express: "ok",
+      backend: "unreachable",
+      model: "unknown",
+      model_detail:
+        `The Python service is not running at ${PYTHON_BACKEND}. ` +
+        `Start it with "python backend/main.py".`,
+      trained_with: null,
+    });
+  }
 });
 
 // GET Transactions List

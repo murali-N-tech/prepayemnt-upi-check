@@ -8,6 +8,7 @@ export default function SystemMonitor() {
   const [txs, setTxs] = useState<Transaction[]>([]);
   const [drift, setDrift] = useState<string>("Checking...");
   const [health, setHealth] = useState<string>("Checking...");
+  const [healthDetail, setHealthDetail] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<"all" | "risk" | "safe">("all");
   const [loading, setLoading] = useState(false);
@@ -20,12 +21,13 @@ export default function SystemMonitor() {
       const [txsData, driftData, healthData] = await Promise.all([
         api<Transaction[]>("/api/transactions"),
         api<{ drift_status?: string }>("/api/model-drift"),
-        api<{ status?: string }>("/api/health"),
+        api<{ status?: string; model?: string; model_detail?: string | null }>("/api/health"),
       ]);
 
       setTxs(txsData || []);
       setDrift(driftData.drift_status || "Model Stable");
       setHealth(healthData.status === "ok" ? "HEALTHY" : "DEGRADED");
+      setHealthDetail(healthData.model_detail ?? null);
     } catch (err: any) {
       setError(err.message || "Failed to parse system metrics");
       setHealth("DEGRADED");
@@ -59,6 +61,12 @@ export default function SystemMonitor() {
 
   return (
     <div className="space-y-8 animate-fade-in" id="system-monitor-container">
+      {healthDetail && (
+        <div className="bg-amber-500/10 border border-amber-500/20 text-amber-300 text-sm rounded-lg p-4">
+          {healthDetail}
+        </div>
+      )}
+
       <div>
         <h1 className="text-3xl font-bold tracking-tight text-white mb-2">System Monitor & Diagnostics</h1>
         <p className="text-slate-400">

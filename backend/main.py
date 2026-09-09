@@ -75,9 +75,6 @@ app = FastAPI()
 # Load ML Model
 # --------------------------------------------------
 
-model = load_model()
-
-
 MODEL_METRICS = load_metrics()
 
 # The decision threshold is not a round number someone liked. It is the point
@@ -90,28 +87,50 @@ FPR_BUDGET = float(
     MODEL_METRICS.get("selected", {}).get("operating_point", {}).get("fpr_budget", 0.01)
 )
 
-# --------------------------------------------------
-# SHAP
-# --------------------------------------------------
-# The background distribution must be real traffic. It used to be
-# np.random.rand(50, 5), which explains a prediction against noise: the
-# attributions were arithmetic, not explanation.
-
 _BACKGROUND_PATH = Path("models") / "shap_background.json"
-if _BACKGROUND_PATH.exists():
-    background_data = pd.read_json(_BACKGROUND_PATH, orient="split")[MODEL_FEATURES]
-else:  # pragma: no cover - only when the model has not been trained yet
-    raise FileNotFoundError(
-        f"{_BACKGROUND_PATH} is missing. Train the model with: python backend/train_model.py"
-    )
+
+# The model is loaded on first use rather than at import. A pickle is tied to
+# the library versions that produced it, so an untrained or mismatched model is
+# a normal thing to hit on a new machine - and it should not take down the
+# payee check, the statement parsing or anything else that does not need it.
+_model = None
+_explainer = None
 
 
-def shap_predict(X):
-    frame = pd.DataFrame(X, columns=MODEL_FEATURES)
-    return model.predict_proba(frame)[:, 1]
+def get_model():
+    global _model
+    if _model is None:
+        _model = load_model()
+    return _model
 
 
-explainer = shap.Explainer(shap_predict, background_data.to_numpy())
+def get_explainer():
+    """SHAP explains against a sample of real training traffic. Explaining
+    against noise, which an earlier version did, is not explanation."""
+    global _explainer
+    if _explainer is None:
+        if not _BACKGROUND_PATH.exists():
+            raise RuntimeError(
+                f"No SHAP background at {_BACKGROUND_PATH}.\n\n"
+                "    Train the model:  python backend/train_model.py"
+            )
+        background = pd.read_json(_BACKGROUND_PATH, orient="split")[MODEL_FEATURES]
+
+        def shap_predict(X):
+            frame = pd.DataFrame(X, columns=MODEL_FEATURES)
+            return get_model().predict_proba(frame)[:, 1]
+
+        _explainer = shap.Explainer(shap_predict, background.to_numpy())
+    return _explainer
+
+
+def model_or_503():
+    """Turn a missing or unloadable model into an answer the caller can act
+    on, rather than a 500 and a pickle traceback in the log."""
+    try:
+        return get_model()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 # --------------------------------------------------
@@ -202,7 +221,22 @@ def home():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """Reports whether the trained model is usable, so a missing or mismatched
+    one shows up here rather than at the first prediction."""
+    model_status = "ready"
+    model_detail = None
+    try:
+        get_model()
+    except RuntimeError as exc:
+        model_status = "unavailable"
+        model_detail = str(exc).splitlines()[0]
+
+    return {
+        "status": "ok",
+        "model": model_status,
+        "model_detail": model_detail,
+        "trained_with": MODEL_METRICS.get("environment"),
+    }
 
 
 # --------------------------------------------------
@@ -272,7 +306,7 @@ def predict(tx: Transaction):
         txns_today=txns_today,
     )
 
-    prob = float(model.predict_proba(to_frame(features))[0][1])
+    prob = float(model_or_503().predict_proba(to_frame(features))[0][1])
     risk_score = int(round(prob * 100))
     model_flag = prob >= DECISION_THRESHOLD
 
@@ -367,7 +401,10 @@ def explain(tx_id: str):
         txns_last_hour=tx.get("velocity_score", 0),
     )
 
-    shap_values = explainer(to_frame(features).to_numpy())
+    try:
+        shap_values = get_explainer()(to_frame(features).to_numpy())
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return {
         "transaction_id": tx_id,

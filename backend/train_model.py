@@ -31,6 +31,7 @@ backend/ml/dataset.FEATURES plus is_fraud, and pass it to train().
 from __future__ import annotations
 
 import json
+import platform
 import sys
 from pathlib import Path
 
@@ -55,6 +56,8 @@ from sklearn.pipeline import Pipeline  # noqa: E402
 from sklearn.preprocessing import StandardScaler  # noqa: E402
 
 import joblib  # noqa: E402
+import scipy  # noqa: E402
+import sklearn  # noqa: E402
 
 from backend.ml.dataset import (  # noqa: E402
     FEATURES,
@@ -190,6 +193,15 @@ def train(df: pd.DataFrame | None = None, seed: int = 42) -> dict:
         return d["recall_by_scenario"].get("social_engineering", {}).get("recall", 0.0)
 
     metrics = {
+        # Recorded so a load failure elsewhere can say what changed. A pickle
+        # is tied to the versions that produced it.
+        "environment": {
+            "python": platform.python_version(),
+            "numpy": np.__version__,
+            "scikit-learn": sklearn.__version__,
+            "scipy": scipy.__version__,
+            "joblib": joblib.__version__,
+        },
         "data": {
             "source": "simulated (backend/ml/dataset.py)",
             "caveat": (

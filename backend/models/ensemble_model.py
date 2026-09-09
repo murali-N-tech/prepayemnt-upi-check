@@ -1,14 +1,13 @@
 """Loads the trained risk model.
 
-This used to hand-roll an "ensemble" that averaged a LogisticRegression
-probability with an IsolationForest's +1/-1 output mapped to 0.8/0.2, over
-models fitted on random numbers. The weighting was arbitrary and the inputs
-carried no signal.
+The model is deliberately NOT committed to git: a pickle is tied to the
+numpy/scikit-learn versions that produced it, so a checked-in one breaks on
+any machine with different versions. It is regenerated locally instead:
 
-The model is now a calibrated classifier trained and evaluated by
-backend/train_model.py, which writes models/metrics.json alongside it. If the
-file is missing, this raises with the command that produces it rather than
-silently loading something stale.
+    python backend/train_model.py
+
+This module's job is to make that obvious when it has not been done, rather
+than surfacing a pickle traceback that says nothing about the fix.
 """
 
 from __future__ import annotations
@@ -23,13 +22,55 @@ ROOT = Path(__file__).resolve().parents[2]
 MODEL_PATH = ROOT / "models" / "risk_model.pkl"
 METRICS_PATH = ROOT / "models" / "metrics.json"
 
+TRAIN_COMMAND = "python backend/train_model.py"
+
+
+def _installed_versions() -> dict[str, str]:
+    versions: dict[str, str] = {}
+    for name in ("numpy", "scikit-learn", "scipy", "joblib"):
+        try:
+            module = __import__("sklearn" if name == "scikit-learn" else name)
+            versions[name] = getattr(module, "__version__", "unknown")
+        except ImportError:
+            versions[name] = "not installed"
+    return versions
+
+
+def _version_mismatch_note() -> str:
+    """Compare what is installed against what the model was trained with."""
+    trained = load_metrics().get("environment") or {}
+    if not trained:
+        return ""
+    installed = _installed_versions()
+    differences = [
+        f"      {pkg:14} trained with {trained[pkg]}, installed {installed.get(pkg)}"
+        for pkg in trained
+        if pkg in installed and trained[pkg] != installed[pkg]
+    ]
+    if not differences:
+        return ""
+    return "\n\n    Version differences found:\n" + "\n".join(differences)
+
 
 def load_model():
     if not MODEL_PATH.exists():
-        raise FileNotFoundError(
-            f"{MODEL_PATH} is missing. Train it with:  python backend/train_model.py"
+        raise RuntimeError(
+            f"No trained model at {MODEL_PATH.relative_to(ROOT)}.\n\n"
+            f"    Train it:  {TRAIN_COMMAND}\n\n"
+            "    Model files are not committed to git because a pickle is tied to\n"
+            "    the library versions that produced it."
         )
-    return joblib.load(MODEL_PATH)
+    try:
+        return joblib.load(MODEL_PATH)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not load {MODEL_PATH.relative_to(ROOT)}: {exc}\n\n"
+            "    This almost always means the file was produced by different\n"
+            "    versions of numpy or scikit-learn than the ones installed here.\n"
+            "    A pickle is not portable across those versions.\n\n"
+            f"    Regenerate it:  {TRAIN_COMMAND}"
+            + _version_mismatch_note()
+        ) from exc
 
 
 def load_metrics() -> dict[str, Any]:
