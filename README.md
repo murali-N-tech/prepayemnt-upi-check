@@ -319,7 +319,7 @@ plus `is_fraud` and pass it to `train()`.
 
 # Author
 
-**N. Unni Krishna**
+**CHINTHADA MURALI NAGA RAJU**
 
 AI / ML Developer
 
