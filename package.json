@@ -3,11 +3,12 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch server.ts",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "tsx watch --ignore \"vite.config.ts.timestamp-*\" --ignore \"./data/**\" --ignore \"./models/**\" --ignore \"./dist/**\" --ignore \"./archive/**\" --ignore \"**/__pycache__/**\" --ignore \"*.db\" --ignore \"*.db-journal\" server.ts",
+    "dev:api": "python backend/main.py",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
-    "start": "vite preview",
-    "dev:once": "tsx server.ts"
+    "start": "vite preview"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

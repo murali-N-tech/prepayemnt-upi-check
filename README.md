@@ -112,12 +112,24 @@ python -c "import secrets; print(secrets.token_hex(32))"   # paste into JWT_SECR
 # 3. train the model   <-- required once, on this machine
 python backend/train_model.py
 
-# 4. the Python service (PDF parsing, scoring, payee checks)
-python backend/main.py                      # http://127.0.0.1:8000
-
-# 5. the app
+# 4. run it  (starts BOTH processes)
 npm run dev                                 # http://localhost:3001
 ```
+
+`npm run dev` starts the Python service on :8000 and Express + Vite on :3001,
+prefixing each one's output, and Ctrl-C stops both. To run them in separate
+terminals instead:
+
+```bash
+npm run dev:api     # python backend/main.py
+npm run dev:web     # tsx watch server.ts
+```
+
+Running only one of them is the most common way this looks broken: the page
+loads from a stale tab and every Vite asset fails with
+`ERR_CONNECTION_REFUSED`, or the payee check and PDF upload return 503. The
+server prints which state it is in on startup, and `GET /api/health` reports
+`express`, `backend` and `model` separately.
 
 **Step 3 is not optional and cannot be skipped by copying a model file from
 somewhere else.** A scikit-learn pickle is tied to the numpy and scikit-learn
