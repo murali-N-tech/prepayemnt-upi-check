@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ScanLine, ShieldCheck, ShieldAlert, ShieldX, AlertTriangle, Info,
-  Flag, Users, CalendarClock, Repeat, Loader2, IndianRupee,
+  Flag, Users, CalendarClock, Repeat, Loader2, IndianRupee, MessageSquareWarning, Lock,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-import { PayeeCheckResult } from "../types";
+import { IntentOption, PayeeCheckResult } from "../types";
 
 const DECISION_STYLE: Record<string, { ring: string; text: string; Icon: typeof ShieldCheck }> = {
   APPROVE: { ring: "bg-emerald-500/10 border-emerald-500/20", text: "text-ok", Icon: ShieldCheck },
@@ -43,6 +43,30 @@ export default function PayeeCheck() {
   const [result, setResult] = useState<PayeeCheckResult | null>(null);
   const [reported, setReported] = useState(false);
 
+  // The coercion context. Both optional: their absence is never treated as
+  // evidence that a payment is safe.
+  const [intent, setIntent] = useState<string>("");
+  const [message, setMessage] = useState("");
+  const [showMessage, setShowMessage] = useState(false);
+  const [intents, setIntents] = useState<IntentOption[]>([]);
+  const [privacyNote, setPrivacyNote] = useState<string | null>(null);
+
+  // Read the options from the server so the UI cannot drift from what is
+  // actually scored.
+  useEffect(() => {
+    let cancelled = false;
+    api<{ intents: IntentOption[]; message_handling: string }>("/api/payee/intents")
+      .then((data) => {
+        if (cancelled) return;
+        setIntents(data.intents || []);
+        setPrivacyNote(data.message_handling || null);
+      })
+      .catch(() => {
+        // The check works without the context step.
+      });
+    return () => { cancelled = true; };
+  }, [api]);
+
   const runCheck = async (value?: string) => {
     const target = (value ?? payload).trim();
     if (!target) {
@@ -56,7 +80,12 @@ export default function PayeeCheck() {
     try {
       const data = await api<PayeeCheckResult>("/api/payee/check", {
         method: "POST",
-        body: JSON.stringify({ payload: target, amount: amount ? parseFloat(amount) : null }),
+        body: JSON.stringify({
+          payload: target,
+          amount: amount ? parseFloat(amount) : null,
+          intent: intent || null,
+          message: message.trim() ? message.trim() : null,
+        }),
       });
       setResult(data);
     } catch (err: any) {
@@ -131,6 +160,70 @@ export default function PayeeCheck() {
               </div>
             </div>
 
+            {/* ── Coercion context ──────────────────────────────────────────
+                The payer's own answer to "why are you paying?" and, if they
+                choose, the message that prompted it. This is the only stream
+                that can see social engineering: by definition the payer's
+                behaviour looks normal, because they were persuaded. */}
+            {intents.length > 0 && (
+              <div className="pt-4 border-t border-line space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-ink-muted mb-1.5">
+                    Why are you paying? <span className="text-ink-subtle font-normal">(optional)</span>
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {intents.map((option) => {
+                      const active = intent === option.id;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => setIntent(active ? "" : option.id)}
+                          className={`px-2.5 py-1.5 rounded-lg border text-xs transition ${
+                            active
+                              ? "border-brand bg-brand/10 text-brand font-medium"
+                              : "border-line bg-inset text-ink-muted hover:text-ink hover:border-line-strong"
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {!showMessage ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowMessage(true)}
+                    className="flex items-center gap-2 text-xs text-brand hover:underline"
+                  >
+                    <MessageSquareWarning className="h-3.5 w-3.5" />
+                    Someone messaged you about this? Paste it
+                  </button>
+                ) : (
+                  <div>
+                    <label className="block text-sm font-medium text-ink-muted mb-1.5">
+                      The message that asked you to pay
+                    </label>
+                    <textarea
+                      value={message}
+                      onChange={(e) => setMessage(e.target.value)}
+                      rows={3}
+                      placeholder="Paste the SMS or WhatsApp message here"
+                      className="w-full px-3 py-2 bg-inset border border-line rounded-lg text-ink placeholder-ink-subtle text-sm resize-y"
+                    />
+                    {privacyNote && (
+                      <p className="mt-1.5 flex gap-1.5 text-[11px] text-ink-subtle leading-relaxed">
+                        <Lock className="h-3 w-3 mt-0.5 shrink-0" />
+                        {privacyNote}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {error && (
               <div className="bg-red-500/10 border border-red-500/20 text-danger text-sm rounded-lg p-3">
                 {error}
@@ -190,6 +283,46 @@ export default function PayeeCheck() {
                   <div className="text-xs text-ink-muted mt-1">out of 100</div>
                 </div>
               </div>
+
+              {/* The point of the whole feature: independent streams agreeing.
+                  Any one of these alone would only be worth a second look. */}
+              {result.agreement?.bonus > 0 && (
+                <div className="rounded-xl border border-brand/25 bg-brand/5 p-5">
+                  <h3 className="text-sm font-semibold text-ink mb-1">
+                    {result.agreement.families.length} independent checks agree
+                  </h3>
+                  <p className="text-xs text-ink-muted leading-relaxed mb-3">
+                    None of these alone would produce this verdict. They point the same
+                    way, and that is what makes it a decision rather than a guess.
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {result.agreement.families.map((family) => (
+                      <span
+                        key={family}
+                        className="px-2 py-1 rounded-md border border-brand/25 bg-surface text-[11px] text-brand font-medium"
+                      >
+                        {family.replace(/_/g, " ")}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* A message was shared and nothing in it stood out - say so,
+                  rather than letting silence read as an all-clear. */}
+              {result.message_pressure?.supplied && result.message_pressure.weak_only && (
+                <div className="rounded-xl border border-line bg-inset p-4 text-xs text-ink-muted leading-relaxed">
+                  The message sounds urgent or official, but genuine bank and biller
+                  messages do too. Nothing in it is something a real institution would
+                  never do, so it was not counted as pressure on its own.
+                </div>
+              )}
+
+              {result.message_pressure?.language_note && (
+                <div className="rounded-xl border border-warn/25 bg-warn/5 p-4 text-xs text-ink-muted leading-relaxed">
+                  {result.message_pressure.language_note}
+                </div>
+              )}
 
               {/* Findings */}
               <div className="bg-surface border border-line rounded-xl p-6">
@@ -261,6 +394,8 @@ export default function PayeeCheck() {
                     ["Address and QR contents", result.component_scores.address_and_qr],
                     ["Payee history", result.component_scores.payee_history],
                     ["Amount in context", result.component_scores.amount_context],
+                    ["What you said you were doing", result.component_scores.stated_intent],
+                    ["Pressure in the message", result.component_scores.message_pressure],
                   ].map(([label, value]) => (
                     <div key={label as string}>
                       <div className="flex justify-between text-xs text-ink-muted mb-1">

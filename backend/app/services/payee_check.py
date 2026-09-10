@@ -1,16 +1,32 @@
 """The pre-payment check.
 
-Combines three views of a payment that has not happened yet:
+Combines views of a payment that has not happened yet:
 
   1. the address itself   - is it valid, does it impersonate someone (vpa.py)
   2. the QR payload       - was the request tampered with (upi_qr.py)
   3. the payee's history  - what has everyone else's money done here
                             (payee_reputation.py)
+  4. the stated purpose   - does it contradict the payee (intent.py)
+  5. the pressure         - what does the message that caused this say
+                            (coercion.py)
 
 and, when the payer is known, their own behaviour baseline. The output is a
 four-way decision rather than approve/block, because the useful answer for a
 pre-payment product is usually the middle: "this payee is nine days old and
 24 people have paid it once each - are you sure?"
+
+Streams 4 and 5 exist because of a measured gap. The payer-behaviour and
+payee-graph streams together catch 58.4% of social-engineering fraud at a 1%
+false-positive budget. The rest is missed structurally: in that fraud class
+the payer behaves normally, because they were persuaded. The evidence is not
+in the transaction - it is in the instruction that produced it, and in the
+mismatch between what the payer thinks they are doing and who actually
+receives the money.
+
+The combination rule matters as much as the streams. A single stream must not
+reach BLOCK on weak evidence, but independent streams AGREEING is much stronger
+than any of them alone - so agreement across families earns a bonus, while two
+findings from the same family do not.
 """
 
 from __future__ import annotations
@@ -18,6 +34,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Optional
 
+from backend.app.services.coercion import analyse_message
+from backend.app.services.intent import analyse_intent
 from backend.app.services.payee_reputation import assess_payee, payee_key
 from backend.app.services.upi_qr import parse_upi_target
 from backend.app.services.vpa import SEVERITY_WEIGHT, VpaFinding
@@ -52,6 +70,17 @@ def _combine(*scores: int) -> int:
     return int(min(99, round(total)))
 
 
+# Corroboration across independent evidence families. Each family gets one
+# vote at most, so a message with four scam patterns still counts once: what
+# is being rewarded is INDEPENDENT streams agreeing, not volume.
+AGREEMENT_BONUS = {2: 6, 3: 14, 4: 22}
+
+
+def _agreement_bonus(family_scores: dict[str, int], threshold: int = 20) -> tuple[int, list[str]]:
+    agreeing = sorted(name for name, score in family_scores.items() if score >= threshold)
+    return AGREEMENT_BONUS.get(len(agreeing), 0), agreeing
+
+
 def _decide(score: int, findings: list[VpaFinding]) -> str:
     if any(f.code in HARD_BLOCK for f in findings):
         return "BLOCK"
@@ -77,8 +106,15 @@ def check_payee(
     payer_id: Optional[str] = None,
     amount: Optional[float] = None,
     conn: Optional[sqlite3.Connection] = None,
+    intent: Optional[str] = None,
+    message: Optional[str] = None,
 ) -> dict[str, Any]:
-    """`payload` is a scanned QR, a pasted UPI ID, or a phone number."""
+    """`payload` is a scanned QR, a pasted UPI ID, or a phone number.
+
+    `intent` is what the payer says they are doing; `message` is the text that
+    prompted the payment. Both optional - every existing caller keeps working,
+    and their absence is never treated as evidence that a payment is safe.
+    """
     qr = parse_upi_target(payload)
 
     key = payee_key(qr.payee_vpa, qr.payee_name)
@@ -105,7 +141,58 @@ def check_payee(
     findings.extend(amount_findings)
 
     amount_score = min(100, sum(SEVERITY_WEIGHT[f.severity] for f in amount_findings))
-    score = _combine(qr.score, reputation.score if reputation else 0, amount_score)
+
+    # ── The stated purpose, checked against who actually gets the money ──────
+    is_phone_payee = qr.kind == "phone" or bool(
+        qr.vpa_analysis and getattr(qr.vpa_analysis, "from_phone", False)
+    )
+    intent_result = analyse_intent(
+        intent,
+        merchant_code=qr.merchant_code,
+        is_phone_payee=is_phone_payee,
+        established=established,
+        payee_name=qr.payee_name,
+    )
+    findings.extend(intent_result.findings)
+
+    # ── The pressure behind the payment ─────────────────────────────────────
+    coercion = analyse_message(message)
+    coercion_findings = [
+        VpaFinding(
+            f"message_{f.code}",
+            f.severity,
+            f.message + (f': "{f.quote}"' if f.quote else ""),
+        )
+        for f in coercion.findings
+    ]
+    # The message score is the fitted probability, not a sum of severities: the
+    # whole point of fitting it was that the patterns are worth different
+    # amounts, and several weak ones must not add up to a strong one.
+    coercion_score = coercion.score if coercion.supplied else 0
+    findings.extend(coercion_findings)
+    if coercion.language_note:
+        findings.append(VpaFinding("message_language", "info", coercion.language_note))
+
+    family_scores = {
+        "address_and_qr": qr.score,
+        "payee_history": reputation.score if reputation else 0,
+        "amount_context": amount_score,
+        "stated_intent": intent_result.score,
+        "message_pressure": coercion_score,
+    }
+    bonus, agreeing = _agreement_bonus(family_scores)
+
+    base = _combine(*family_scores.values())
+    score = int(min(99, base + bonus))
+    if bonus:
+        findings.append(VpaFinding(
+            "streams_agree", "high",
+            f"{len(agreeing)} independent checks flagged this payment "
+            f"({', '.join(a.replace('_', ' ') for a in agreeing)}). Any one of them "
+            f"alone would be worth a second look; together they are the reason for "
+            f"this verdict."
+        ))
+
     decision = _decide(score, findings)
 
     findings.sort(key=lambda f: -SEVERITY_ORDER[f.severity])
@@ -132,11 +219,10 @@ def check_payee(
         "risk_score": score,
         "decision": decision,
         "headline": HEADLINES[decision],
-        "component_scores": {
-            "address_and_qr": qr.score,
-            "payee_history": reputation.score if reputation else 0,
-            "amount_context": amount_score,
-        },
+        "intent": intent_result.as_dict(),
+        "message_pressure": coercion.as_dict(),
+        "component_scores": family_scores,
+        "agreement": {"families": agreeing, "bonus": bonus},
         "findings": [
             {"code": f.code, "severity": f.severity, "message": f.message} for f in findings
         ],

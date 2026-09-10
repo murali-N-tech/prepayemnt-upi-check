@@ -1,0 +1,103 @@
+{
+  "trained_at": "2026-09-10T14:25:32+00:00",
+  "feature_order": [
+    "authority",
+    "urgency",
+    "fear",
+    "pay_request",
+    "secrecy",
+    "remote_control",
+    "verify_payment",
+    "lure",
+    "contact_offline",
+    "credential_request"
+  ],
+  "coefficients": {
+    "authority": 0.0528,
+    "urgency": 2.6775,
+    "fear": 2.9107,
+    "pay_request": 4.0031,
+    "secrecy": 3.993,
+    "remote_control": 2.8762,
+    "verify_payment": 1.9834,
+    "lure": 3.3632,
+    "contact_offline": 2.4292,
+    "credential_request": 0.4186
+  },
+  "intercept": -5.5996,
+  "threshold": 0.36,
+  "metrics": {
+    "corpus": {
+      "total": 1022,
+      "scam": 364,
+      "hard_negative": 557,
+      "easy_negative": 101,
+      "note": "Templated, not collected from real scam traffic. These numbers measure the method, not field performance."
+    },
+    "held_out": {
+      "n": 307,
+      "recall_on_scams": 0.945,
+      "false_positive_rate_hard_negatives": 0.023,
+      "false_positive_rate_easy_negatives": 0.0,
+      "roc_auc": 0.9974,
+      "pr_auc": 0.9935,
+      "threshold": 0.36,
+      "threshold_chosen_by": "lowest threshold with <=5% false positives on hard negatives, measured on train"
+    },
+    "per_pattern_on_full_corpus": {
+      "authority": {
+        "fires_on": 494,
+        "precision": 0.354,
+        "recall": 0.481
+      },
+      "urgency": {
+        "fires_on": 324,
+        "precision": 0.762,
+        "recall": 0.679
+      },
+      "fear": {
+        "fires_on": 230,
+        "precision": 0.635,
+        "recall": 0.401
+      },
+      "pay_request": {
+        "fires_on": 379,
+        "precision": 0.689,
+        "recall": 0.717
+      },
+      "secrecy": {
+        "fires_on": 105,
+        "precision": 1.0,
+        "recall": 0.288
+      },
+      "remote_control": {
+        "fires_on": 37,
+        "precision": 0.324,
+        "recall": 0.033
+      },
+      "verify_payment": {
+        "fires_on": 127,
+        "precision": 0.795,
+        "recall": 0.277
+      },
+      "lure": {
+        "fires_on": 94,
+        "precision": 0.755,
+        "recall": 0.195
+      },
+      "contact_offline": {
+        "fires_on": 150,
+        "precision": 0.667,
+        "recall": 0.275
+      },
+      "credential_request": {
+        "fires_on": 113,
+        "precision": 0.274,
+        "recall": 0.085
+      }
+    }
+  },
+  "environment": {
+    "python": "3.10.4"
+  }
+}

@@ -124,7 +124,32 @@ export interface PayeeCheckResult {
     address_and_qr: number;
     payee_history: number;
     amount_context: number;
+    stated_intent: number;
+    message_pressure: number;
   };
+  intent: {
+    supplied: boolean;
+    intent: string | null;
+    label: string | null;
+    score: number;
+    findings: PayeeFinding[];
+  };
+  message_pressure: {
+    supplied: boolean;
+    score: number;
+    probability: number;
+    patterns: Record<string, number>;
+    language_note: string | null;
+    model: string;
+    weak_only: boolean;
+    findings: { code: string; severity: string; message: string; quote: string | null }[];
+  };
+  agreement: { families: string[]; bonus: number };
   findings: PayeeFinding[];
   payer_behaviour: PersonalizedAssessment | null;
+}
+
+export interface IntentOption {
+  id: string;
+  label: string;
 }

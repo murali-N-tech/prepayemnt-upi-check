@@ -37,6 +37,7 @@ from backend.app.services.personalized_risk_service import (
     evaluate_personalized_risk,
 )
 from backend.app.services.fraud_graph import detect_rings, graph_summary, load_edges
+from backend.app.services.intent import INTENTS
 from backend.app.services.payee_check import check_payee
 from backend.app.services.upi_verify import (
     is_configured as upi_verifier_configured,
@@ -170,6 +171,11 @@ class PayeeCheckRequest(BaseModel):
     """`payload` is a scanned QR, a pasted UPI ID, or a phone number."""
     payload: str
     amount: float | None = None
+    # What the payer says they are doing. One of intent.INTENTS.
+    intent: str | None = None
+    # The message that prompted this payment, if the payer chose to share it.
+    # Opt-in, scored in memory, and never stored - see /payee/intents.
+    message: str | None = None
 
 
 class PayeeReportRequest(BaseModel):
@@ -814,6 +820,25 @@ _assert_no_duplicate_routes()
 # Pre-payment payee check
 # --------------------------------------------------
 
+@app.get("/payee/intents")
+def payee_intents():
+    """The stated-purpose options, and what happens to a shared message.
+
+    The UI reads the list from here so it cannot drift from what the server
+    actually scores, and the privacy line is served with it so the promise and
+    the implementation live in the same place.
+    """
+    return {
+        "intents": [{"id": key, "label": label} for key, label in INTENTS.items()],
+        "message_handling": (
+            "Sharing the message is optional. It is scored in memory and "
+            "discarded - the text is never written to disk or logged, and only "
+            "the matched pattern names appear in the result."
+        ),
+        "language_coverage": ["English", "romanised Hindi"],
+    }
+
+
 @app.post("/payee/check")
 def payee_check(payload: PayeeCheckRequest, user: str = Depends(get_current_user)):
     """Score a payee BEFORE any money moves.
@@ -825,7 +850,13 @@ def payee_check(payload: PayeeCheckRequest, user: str = Depends(get_current_user
     if not payload.payload.strip():
         raise HTTPException(status_code=400, detail="Nothing to check")
 
-    result = check_payee(payload.payload, payer_id=user, amount=payload.amount)
+    result = check_payee(
+        payload.payload,
+        payer_id=user,
+        amount=payload.amount,
+        intent=payload.intent,
+        message=payload.message,
+    )
 
     # Fold the payer's own baseline in when there is one, so a payment that is
     # odd FOR THEM still surfaces even if the payee looks fine.
@@ -865,7 +896,13 @@ def payee_report(payload: PayeeReportRequest, user: str = Depends(get_current_us
 def payee_confirm(payload: PayeeCheckRequest, user: str = Depends(get_current_user)):
     """Record that the payer went ahead. This is what grows the reputation
     graph: without it the store only ever knows what was uploaded."""
-    result = check_payee(payload.payload, payer_id=user, amount=payload.amount)
+    result = check_payee(
+        payload.payload,
+        payer_id=user,
+        amount=payload.amount,
+        intent=payload.intent,
+        message=payload.message,
+    )
     vpa = result["payee"]["key"]
     if vpa and payload.amount:
         record_payment(vpa, payer_id=user, amount=payload.amount,
