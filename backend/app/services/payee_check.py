@@ -37,6 +37,7 @@ from typing import Any, Optional
 from backend.app.services.coercion import analyse_message
 from backend.app.services.intent import analyse_intent
 from backend.app.services.payee_reputation import assess_payee, payee_key
+from backend.app.services.scam_link import analyse_links, brand_conflicts_with_payee
 from backend.app.services.upi_qr import parse_upi_target
 from backend.app.services.vpa import SEVERITY_WEIGHT, VpaFinding
 
@@ -173,8 +174,21 @@ def check_payee(
     if coercion.language_note:
         findings.append(VpaFinding("message_language", "info", coercion.language_note))
 
+    # ── Any link carried by the message or the QR ───────────────────────────
+    # Both sources: upi_qr.py already noticed when a QR payload carries a url
+    # parameter, but it could only say that one existed.
+    link_source = " ".join(filter(None, [message, payload]))
+    links = analyse_links(link_source)
+    link_findings = list(links.findings)
+    conflict = brand_conflicts_with_payee(links, qr.payee_vpa)
+    if conflict:
+        link_findings.append(conflict)
+    findings.extend(link_findings)
+    link_score = min(100, links.score + (SEVERITY_WEIGHT[conflict.severity] if conflict else 0))
+
     family_scores = {
         "address_and_qr": qr.score,
+        "link_safety": link_score,
         "payee_history": reputation.score if reputation else 0,
         "amount_context": amount_score,
         "stated_intent": intent_result.score,
@@ -221,6 +235,7 @@ def check_payee(
         "headline": HEADLINES[decision],
         "intent": intent_result.as_dict(),
         "message_pressure": coercion.as_dict(),
+        "links": links.as_dict(),
         "component_scores": family_scores,
         "agreement": {"families": agreeing, "bonus": bonus},
         "findings": [

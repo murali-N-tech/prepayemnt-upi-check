@@ -126,6 +126,7 @@ export interface PayeeCheckResult {
     amount_context: number;
     stated_intent: number;
     message_pressure: number;
+    link_safety: number;
   };
   intent: {
     supplied: boolean;
@@ -143,6 +144,19 @@ export interface PayeeCheckResult {
     model: string;
     weak_only: boolean;
     findings: { code: string; severity: string; message: string; quote: string | null }[];
+  };
+  links: {
+    found: number;
+    score: number;
+    links: {
+      url: string;
+      host: string;
+      registrable: string;
+      claimed_brand: string | null;
+      score: number;
+      features: Record<string, number>;
+      findings: PayeeFinding[];
+    }[];
   };
   agreement: { families: string[]; bonus: number };
   findings: PayeeFinding[];

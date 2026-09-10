@@ -324,6 +324,47 @@ export default function PayeeCheck() {
                 </div>
               )}
 
+              {result.links?.found > 0 && (
+                <div className="bg-surface border border-line rounded-xl p-6">
+                  <h3 className="text-sm font-semibold text-ink mb-1">
+                    {result.links.found === 1 ? "The link in this" : `${result.links.found} links in this`}
+                  </h3>
+                  <p className="text-xs text-ink-subtle mb-4">
+                    Read from the address only. Nothing here was opened or fetched.
+                  </p>
+                  <div className="space-y-3">
+                    {result.links.links.map((link, i) => (
+                      <div key={i} className="rounded-lg border border-line bg-inset p-3">
+                        <div className="font-mono text-xs text-ink break-all">{link.url}</div>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+                          <span className="text-ink-subtle">
+                            actually goes to{" "}
+                            <span className="font-mono font-semibold text-ink">{link.registrable}</span>
+                          </span>
+                          {link.claimed_brand && (
+                            <span className="px-1.5 py-0.5 rounded border border-warn/25 bg-warn/10 text-warn">
+                              claims {link.claimed_brand}
+                            </span>
+                          )}
+                        </div>
+                        {link.findings.length > 0 && (
+                          <ul className="mt-2.5 space-y-1.5">
+                            {link.findings.map((f, j) => (
+                              <li key={j} className="text-xs text-ink-muted leading-relaxed flex gap-2">
+                                <span className={`mt-1.5 h-1 w-1 rounded-full shrink-0 ${
+                                  f.severity === "critical" ? "bg-danger"
+                                  : f.severity === "high" ? "bg-warn" : "bg-ink-faint"}`} />
+                                {f.message}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Findings */}
               <div className="bg-surface border border-line rounded-xl p-6">
                 <h3 className="text-lg font-semibold text-ink mb-4">What the check found</h3>
@@ -396,6 +437,7 @@ export default function PayeeCheck() {
                     ["Amount in context", result.component_scores.amount_context],
                     ["What you said you were doing", result.component_scores.stated_intent],
                     ["Pressure in the message", result.component_scores.message_pressure],
+                    ["Links in it", result.component_scores.link_safety],
                   ].map(([label, value]) => (
                     <div key={label as string}>
                       <div className="flex justify-between text-xs text-ink-muted mb-1">
