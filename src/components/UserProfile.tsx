@@ -20,6 +20,7 @@ export default function UserProfile() {
   const [totalCount, setTotalCount] = useState(0);
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [txSearch, setTxSearch] = useState("");
   const [txSort, setTxSort] = useState<{ key: string; dir: "asc" | "desc" }>({ key: "timestamp", dir: "desc" });
   const [txPage, setTxPage] = useState(0);
@@ -34,18 +35,36 @@ export default function UserProfile() {
     const fetchData = async () => {
       // Both endpoints are scoped to the signed-in user by the token, so the
       // component never asks for another account's data.
-      const p = await api<BehaviorProfile>("/api/profiles/me").catch(() => null);
+      // Both requests used to .catch(() => null) and drop the reason, so a
+      // backend that was down produced the same screen as a user who had
+      // simply never uploaded a statement: "No Profile Found - you haven't
+      // generated a behavior profile yet." That is a false statement about the
+      // user's own data, and it sent people to re-upload a statement they had
+      // already uploaded. Keep the error and say which one it was.
+      let failure: string | null = null;
+
+      const p = await api<BehaviorProfile>("/api/profiles/me").catch((e: any) => {
+        // A 404 here genuinely means "no profile yet"; anything else is a fault.
+        if (!/\b404\b|not found/i.test(String(e?.message ?? ""))) {
+          failure = e?.message || "Could not load your profile";
+        }
+        return null;
+      });
       if (p) setProfile(p);
 
       const page = await api<StatementTransactionsPage>(
         "/api/statement-transactions"
-      ).catch(() => null);
+      ).catch((e: any) => {
+        failure = failure ?? (e?.message || "Could not load your transactions");
+        return null;
+      });
       if (page) {
         setTransactions(page.transactions ?? []);
         setTotalCount(page.total ?? 0);
         setTruncated(!!page.truncated);
       }
 
+      setLoadError(failure);
       setLoading(false);
     };
 
@@ -108,8 +127,19 @@ export default function UserProfile() {
       const key = txSort.key as keyof StatementTransaction;
       const aVal = a[key] ?? "";
       const bVal = b[key] ?? "";
-      if (txSort.dir === "asc") return String(aVal).localeCompare(String(bVal));
-      return String(bVal).localeCompare(String(aVal));
+      // Everything used to be compared with localeCompare, so the amount
+      // column sorted lexically: 900 came after 1,000 and 95 after 9,500.
+      // Timestamps sorted by string too, which only happened to work because
+      // they are ISO.
+      let cmp: number;
+      if (key === "amount") {
+        cmp = (Number(aVal) || 0) - (Number(bVal) || 0);
+      } else if (key === "timestamp") {
+        cmp = (Date.parse(String(aVal)) || 0) - (Date.parse(String(bVal)) || 0);
+      } else {
+        cmp = String(aVal).localeCompare(String(bVal));
+      }
+      return txSort.dir === "asc" ? cmp : -cmp;
     });
 
   const totalPages = Math.ceil(filteredTxs.length / TXS_PER_PAGE);
@@ -148,9 +178,14 @@ export default function UserProfile() {
   const totalSpent = profile?.monthly_totals
     ? Object.values(profile.monthly_totals).reduce((sum, v) => sum + v, 0)
     : transactions.reduce((sum, tx) => sum + (tx.amount || 0), 0);
-  const uniqueMerchants = profile?.merchant_frequency
-    ? Object.keys(profile.merchant_frequency).length
-    : new Set(transactions.map(tx => tx.merchant)).size;
+  // merchant_frequency is deliberately the top 10, so Object.keys().length
+  // could never report more than 10 unique payees however large the statement.
+  // distinct_payees is the real count.
+  const uniqueMerchants =
+    profile?.distinct_payees ??
+    (profile?.merchant_frequency
+      ? Object.keys(profile.merchant_frequency).length
+      : new Set(transactions.map(tx => tx.merchant)).size);
 
   // ── Loading State ──
 
@@ -165,6 +200,7 @@ export default function UserProfile() {
   // ── Empty State ──
 
   if (!profile && totalCount === 0) {
+    const failed = loadError !== null;
     return (
       <div className="space-y-8 animate-fade-in h-full flex flex-col" id="user-profile-container">
         <div>
@@ -172,10 +208,14 @@ export default function UserProfile() {
           <p className="text-ink-muted">View your personalized payment behavior statistics.</p>
         </div>
         <div className="bg-surface/40 border border-line rounded-xl p-12 text-center flex-1 flex flex-col justify-center items-center">
-          <User className="h-16 w-16 text-ink-faint mb-4" />
-          <h3 className="text-lg font-semibold text-ink mb-1">No Profile Found</h3>
+          <User className={`h-16 w-16 mb-4 ${failed ? "text-warn" : "text-ink-faint"}`} />
+          <h3 className="text-lg font-semibold text-ink mb-1">
+            {failed ? "Couldn't load your profile" : "No Profile Found"}
+          </h3>
           <p className="text-ink-muted max-w-md text-sm">
-            You haven't generated a behavior profile yet. Head over to the Upload Statement page to extract your data.
+            {failed
+              ? `Your data may well be there - this screen could not reach it. ${loadError}`
+              : "You haven't generated a behavior profile yet. Head over to the Upload Statement page to extract your data."}
           </p>
         </div>
       </div>
@@ -417,12 +457,24 @@ export default function UserProfile() {
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 text-sm text-ink-muted">
             <div className="p-3 bg-inset/60 rounded-lg border border-line/50">
               <span className="text-ink-subtle block mb-1 text-xs uppercase font-semibold">Night Txn Ratio</span>
-              <span className="font-semibold text-ink">
-                {profile.transaction_count > 0
-                  ? Math.round((profile.night_transactions / profile.transaction_count) * 100)
-                  : 0}%
-              </span>
-              <span className="text-ink-subtle text-xs ml-1">({profile.night_transactions} txns)</span>
+              {(() => {
+                // night_transactions only counts rows that carried a clock
+                // time, so transaction_count is the wrong denominator: on a
+                // statement where half the rows print no time this halved the
+                // ratio. Divide by the rows the count was taken over, and say
+                // so, rather than quietly reporting a smaller number.
+                const timed = profile.timed_transaction_count ?? profile.transaction_count;
+                return (
+                  <>
+                    <span className="font-semibold text-ink">
+                      {timed > 0 ? Math.round((profile.night_transactions / timed) * 100) : 0}%
+                    </span>
+                    <span className="text-ink-subtle text-xs ml-1">
+                      ({profile.night_transactions} of {timed} timed)
+                    </span>
+                  </>
+                );
+              })()}
             </div>
             <div className="p-3 bg-inset/60 rounded-lg border border-line/50">
               <span className="text-ink-subtle block mb-1 text-xs uppercase font-semibold">Weekend Activity</span>

@@ -1,15 +1,15 @@
 """Fit the coercion detector and report what it is actually worth.
 
-Eleven binary features and a logistic regression. That is deliberate, not a
+Ten binary features and a logistic regression. That is deliberate, not a
 shortcut - see the note at the top of backend/app/services/coercion.py. The
 contribution of this feature is the FUSION of three evidence streams, and the
 text model is one input to it; an opaque text model would defeat the purpose,
 because the explanation is what the payer acts on.
 
-Output is models/coercion_weights.json: eleven coefficients, an intercept, and
+Output is models/coercion_weights.json: ten coefficients, an intercept, and
 the metrics below. JSON rather than a pickle - a scikit-learn pickle is bound
 to the numpy version that wrote it, this project has already lost time to
-exactly that, and eleven numbers do not need a binary format.
+exactly that, and ten numbers do not need a binary format.
 
     python -m backend.ml.coercion_model
 """
@@ -32,7 +32,6 @@ from sklearn.metrics import average_precision_score, roc_auc_score  # noqa: E402
 from sklearn.model_selection import train_test_split  # noqa: E402
 
 from backend.app.services.coercion import (  # noqa: E402
-    ALL_PATTERNS,
     FEATURE_ORDER,
     STRONG_PATTERNS,
     WEAK_PATTERNS,
@@ -58,10 +57,10 @@ SEED = 42
 
 # The threshold is CHOSEN, not defaulted to 0.5, and it is chosen against the
 # hard negatives: how much shouting at genuine bank messages is acceptable.
-# This mirrors how the main classifier is reported (recall at a 1% false
-# positive budget) - a fraud warning that fires on real bank alerts trains
-# people to dismiss it, so the budget is the safety constraint and recall is
-# whatever it turns out to be at that budget.
+# The main classifier uses a 1% budget; this one is looser at 5% because a
+# message warning is advisory and sits alongside four other streams, whereas
+# the classifier's flag stands alone. Stating the difference rather than
+# implying they are the same number.
 HARD_FP_BUDGET = 0.05
 
 
@@ -220,7 +219,9 @@ def main() -> None:
 
     print(f"\n  written: {OUT.relative_to(ROOT)}")
     print(f"  {metrics['corpus']['note']}")
-    assert len(ALL_PATTERNS) == len(WEAK_PATTERNS) + len(STRONG_PATTERNS)
+    print(f"  The threshold above is a REPORTING threshold. payee_check consumes the")
+    print(f"  continuous score, so these recall/FP figures describe this model in")
+    print(f"  isolation, not the verdict the product reaches.")
 
 
 if __name__ == "__main__":

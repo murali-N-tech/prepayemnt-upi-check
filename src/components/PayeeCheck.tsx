@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import { amountProblem, describeCap, rupeeInputProps } from "../lib/upiLimits";
+import QrScanner from "./QrScanner";
+import { useLastCheck } from "../context/CheckContext";
 import {
   ScanLine, ShieldCheck, ShieldAlert, ShieldX, AlertTriangle, Info,
   Flag, Users, CalendarClock, Repeat, Loader2, IndianRupee, MessageSquareWarning, Lock,
@@ -6,36 +9,117 @@ import {
 import { useAuth } from "../context/AuthContext";
 import { IntentOption, PayeeCheckResult } from "../types";
 
-const DECISION_STYLE: Record<string, { ring: string; text: string; Icon: typeof ShieldCheck }> = {
-  APPROVE: { ring: "bg-emerald-500/10 border-emerald-500/20", text: "text-ok", Icon: ShieldCheck },
-  WARN:    { ring: "bg-amber-500/10 border-amber-500/20",     text: "text-warn",   Icon: AlertTriangle },
-  STEP_UP: { ring: "bg-orange-500/10 border-orange-500/20",   text: "text-orange-700 dark:text-orange-400",  Icon: ShieldAlert },
-  BLOCK:   { ring: "bg-rose-500/10 border-rose-500/20",       text: "text-danger",    Icon: ShieldX },
+/* ── Decision styling ──────────────────────────────────────────────────────── */
+const DECISION_META: Record<string, {
+  gradient: string;
+  border: string;
+  glow: string;
+  text: string;
+  Icon: typeof ShieldCheck;
+}> = {
+  APPROVE: {
+    gradient: "linear-gradient(135deg, color-mix(in oklab, var(--ok) 10%, transparent), color-mix(in oklab, var(--ok) 6%, transparent))",
+    border:   "color-mix(in oklab, var(--ok) 30%, transparent)",
+    glow:     "0 4px 20px var(--glow-ok, rgba(4,120,87,0.25))",
+    text:     "var(--ok)",
+    Icon:     ShieldCheck,
+  },
+  WARN: {
+    gradient: "linear-gradient(135deg, color-mix(in oklab, var(--warn) 10%, transparent), color-mix(in oklab, var(--warn) 5%, transparent))",
+    border:   "color-mix(in oklab, var(--warn) 30%, transparent)",
+    glow:     "0 4px 20px var(--glow-warn, rgba(180,83,9,0.2))",
+    text:     "var(--warn)",
+    Icon:     AlertTriangle,
+  },
+  STEP_UP: {
+    gradient: "linear-gradient(135deg, color-mix(in oklab, var(--warn) 12%, transparent), color-mix(in oklab, orange 6%, transparent))",
+    border:   "color-mix(in oklab, var(--warn) 35%, transparent)",
+    glow:     "0 4px 20px var(--glow-warn, rgba(180,83,9,0.25))",
+    text:     "var(--warn)",
+    Icon:     ShieldAlert,
+  },
+  BLOCK: {
+    gradient: "linear-gradient(135deg, color-mix(in oklab, var(--danger) 12%, transparent), color-mix(in oklab, var(--danger) 6%, transparent))",
+    border:   "color-mix(in oklab, var(--danger) 30%, transparent)",
+    glow:     "0 4px 20px var(--glow-danger, rgba(220,38,38,0.25))",
+    text:     "var(--danger)",
+    Icon:     ShieldX,
+  },
 };
 
 const DECISION_LABEL: Record<string, string> = {
   APPROVE: "Looks safe",
-  WARN: "Check first",
+  WARN:    "Check first",
   STEP_UP: "Verify the payee",
-  BLOCK: "Do not pay",
+  BLOCK:   "Do not pay",
 };
 
-const SEVERITY_STYLE: Record<string, string> = {
-  critical: "border-rose-500/30 bg-rose-500/5 text-danger",
-  high: "border-orange-500/30 bg-orange-500/5 text-orange-700 dark:text-orange-300",
-  warn: "border-amber-500/30 bg-amber-500/5 text-warn",
-  info: "border-line bg-inset/60 text-ink-muted",
+const SEVERITY_META: Record<string, { bg: string; border: string; text: string; dot: string }> = {
+  critical: {
+    bg:     "color-mix(in oklab, var(--danger) 8%, transparent)",
+    border: "color-mix(in oklab, var(--danger) 25%, transparent)",
+    text:   "var(--danger)",
+    dot:    "var(--danger)",
+  },
+  high: {
+    bg:     "color-mix(in oklab, var(--warn) 8%, transparent)",
+    border: "color-mix(in oklab, var(--warn) 25%, transparent)",
+    text:   "var(--warn)",
+    dot:    "var(--warn)",
+  },
+  warn: {
+    bg:     "color-mix(in oklab, var(--warn) 5%, transparent)",
+    border: "color-mix(in oklab, var(--warn) 15%, transparent)",
+    text:   "var(--warn)",
+    dot:    "var(--warn)",
+  },
+  info: {
+    bg:     "var(--inset)",
+    border: "var(--line)",
+    text:   "var(--ink-muted)",
+    dot:    "var(--ink-faint)",
+  },
 };
 
 const EXAMPLES = [
   { label: "Legitimate shop QR", value: "upi://pay?pa=demo-chaipoint@okhdfcbank&pn=Chai%20Point&am=40&cu=INR" },
   { label: "Tampered QR sticker", value: "upi://pay?pa=rakesh9911@ybl&pn=Reliance%20Digital&am=48999" },
-  { label: "Fake bank refund", value: "sbi-refund@okaxis" },
-  { label: "Collection account", value: "demo-mule@ybl" },
+  { label: "Fake bank refund",    value: "sbi-refund@okaxis" },
+  { label: "Collection account",  value: "demo-mule@ybl" },
 ];
+
+/* ── Score gauge ─────────────────────────────────────────────────────────── */
+function RiskGauge({ score, color }: { score: number; color: string }) {
+  const r = 40;
+  const circumference = 2 * Math.PI * r;
+  const offset = circumference - (score / 100) * circumference;
+
+  return (
+    <div className="relative flex flex-col items-center">
+      <svg width="100" height="100" viewBox="0 0 100 100" className="rotate-[-90deg]">
+        <circle cx="50" cy="50" r={r} fill="none" stroke="var(--raised)" strokeWidth="8" />
+        <circle
+          cx="50" cy="50" r={r} fill="none"
+          stroke={color} strokeWidth="8"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          style={{ transition: "stroke-dashoffset 0.8s ease", filter: `drop-shadow(0 0 6px ${color}60)` }}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-2xl font-black tabular-nums" style={{ color: "var(--ink)" }}>{score}</span>
+        <span className="text-[9px] font-semibold uppercase tracking-wider" style={{ color: "var(--ink-subtle)" }}>/ 100</span>
+      </div>
+    </div>
+  );
+}
+
+/* ── Component ─────────────────────────────────────────────────────────────── */
 
 export default function PayeeCheck() {
   const { api } = useAuth();
+  const { setLastCheck } = useLastCheck();
   const [payload, setPayload] = useState("");
   const [amount, setAmount] = useState("");
   const [loading, setLoading] = useState(false);
@@ -43,16 +127,12 @@ export default function PayeeCheck() {
   const [result, setResult] = useState<PayeeCheckResult | null>(null);
   const [reported, setReported] = useState(false);
 
-  // The coercion context. Both optional: their absence is never treated as
-  // evidence that a payment is safe.
   const [intent, setIntent] = useState<string>("");
   const [message, setMessage] = useState("");
   const [showMessage, setShowMessage] = useState(false);
   const [intents, setIntents] = useState<IntentOption[]>([]);
   const [privacyNote, setPrivacyNote] = useState<string | null>(null);
 
-  // Read the options from the server so the UI cannot drift from what is
-  // actually scored.
   useEffect(() => {
     let cancelled = false;
     api<{ intents: IntentOption[]; message_handling: string }>("/api/payee/intents")
@@ -61,16 +141,14 @@ export default function PayeeCheck() {
         setIntents(data.intents || []);
         setPrivacyNote(data.message_handling || null);
       })
-      .catch(() => {
-        // The check works without the context step.
-      });
+      .catch(() => {});
     return () => { cancelled = true; };
   }, [api]);
 
   const runCheck = async (value?: string) => {
     const target = (value ?? payload).trim();
     if (!target) {
-      setError("Paste a UPI ID, a QR code's contents, or a phone number.");
+      setError("Scan a QR code, add a photo of one, or type a UPI ID or phone number.");
       return;
     }
     setLoading(true);
@@ -88,6 +166,8 @@ export default function PayeeCheck() {
         }),
       });
       setResult(data);
+      // Publish it so the assistant can answer questions about THIS verdict.
+      setLastCheck(data);
     } catch (err: any) {
       setError(err.message || "Could not run the check.");
     } finally {
@@ -108,14 +188,30 @@ export default function PayeeCheck() {
     }
   };
 
-  const style = result ? DECISION_STYLE[result.decision] ?? DECISION_STYLE.WARN : null;
-  const rep = result?.reputation;
+  const meta = result ? DECISION_META[result.decision] ?? DECISION_META.WARN : null;
+  const rep  = result?.reputation;
 
   return (
     <div className="space-y-8 animate-fade-in" id="payee-check-container">
+      {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold tracking-tight text-ink mb-2">Check a payee</h1>
-        <p className="text-ink-muted max-w-3xl">
+        <h1
+          className="text-3xl font-extrabold tracking-tight mb-2"
+          style={{ color: "var(--ink)" }}
+        >
+          Check a{" "}
+          <span
+            style={{
+              background: "linear-gradient(135deg, var(--brand), var(--violet, #7c3aed))",
+              WebkitBackgroundClip: "text",
+              WebkitTextFillColor: "transparent",
+              backgroundClip: "text",
+            }}
+          >
+            payee
+          </span>
+        </h1>
+        <p className="max-w-3xl" style={{ color: "var(--ink-muted)" }}>
           Checks who you are about to pay, before the money moves. Every other page here
           scores your own behaviour, which cannot tell that a first payment to a scammer
           is a scam. This looks at the address instead.
@@ -123,53 +219,97 @@ export default function PayeeCheck() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Input */}
-        <div className="bg-surface border border-line rounded-xl p-6 h-fit">
-          <h2 className="text-xl font-semibold text-ink mb-4">Payee details</h2>
+        {/* ── Input panel ─────────────────────────────────────────────── */}
+        <div
+          className="rounded-2xl p-6 h-fit"
+          style={{
+            background: "var(--surface)",
+            border: "1px solid var(--line)",
+            boxShadow: "0 4px 24px rgba(0,0,0,0.06)",
+          }}
+        >
+          <h2 className="text-xl font-bold mb-4" style={{ color: "var(--ink)" }}>Payee details</h2>
 
-          <form
-            onSubmit={(e) => { e.preventDefault(); runCheck(); }}
-            className="space-y-4"
-          >
-            <div>
-              <label className="block text-sm font-medium text-ink-muted mb-1">
-                UPI ID, QR contents, or phone number
-              </label>
-              <textarea
-                value={payload}
-                onChange={(e) => setPayload(e.target.value)}
-                rows={3}
-                placeholder="name@bank   ·   upi://pay?pa=...   ·   9876543210"
-                className="w-full px-4 py-2 bg-inset border border-line rounded-lg text-ink placeholder-ink-subtle font-mono text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-y"
-              />
-            </div>
+          <form onSubmit={(e) => { e.preventDefault(); runCheck(); }} className="space-y-4">
+            {/* Scan, photograph, or type. The page used to offer only the
+                textarea, labelled "QR contents" - which meant the decoded
+                string `upi://pay?pa=...`. Nobody has that: what a person has is
+                a code on a counter. QrScanner decodes it on the device and
+                hands the payload here, so everything below is unchanged. */}
+            <QrScanner
+              onPayload={(decoded) => {
+                setPayload(decoded);
+                setError(null);
+                // Deliberately NOT auto-running the check. The payer should see
+                // what was read off the code - a swapped sticker is exactly
+                // what this page exists to catch - and press the button
+                // themselves. Nothing is opened or followed either way.
+              }}
+              typeTab={
+                <div>
+                  <label className="block text-sm font-semibold mb-1.5" style={{ color: "var(--ink-muted)" }}>
+                    UPI ID, QR contents, or phone number
+                  </label>
+                  <textarea
+                    value={payload}
+                    onChange={(e) => setPayload(e.target.value)}
+                    rows={3}
+                    placeholder="name@bank   ·   upi://pay?pa=...   ·   9876543210"
+                    className="w-full px-4 py-3 rounded-xl font-mono text-sm resize-y transition-all duration-150"
+                    style={{
+                      background: "var(--inset)",
+                      border: "1px solid var(--line)",
+                      color: "var(--ink)",
+                    }}
+                    onFocus={(e) => {
+                      e.target.style.borderColor = "color-mix(in oklab, var(--brand) 50%, transparent)";
+                      e.target.style.boxShadow = "0 0 0 3px color-mix(in oklab, var(--brand) 15%, transparent)";
+                    }}
+                    onBlur={(e) => {
+                      e.target.style.borderColor = "var(--line)";
+                      e.target.style.boxShadow = "none";
+                    }}
+                  />
+                </div>
+              }
+            />
 
             <div>
-              <label className="block text-sm font-medium text-ink-muted mb-1">
-                Amount (optional)
+              <label className="block text-sm font-semibold mb-1.5" style={{ color: "var(--ink-muted)" }}>
+                Amount <span style={{ color: "var(--ink-subtle)", fontWeight: 400 }}>(optional)</span>
               </label>
               <div className="relative">
-                <IndianRupee className="h-4 w-4 text-ink-subtle absolute left-3 top-1/2 -translate-y-1/2" />
+                <IndianRupee className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "var(--ink-subtle)" }} />
                 <input
-                  type="number"
+                  {...rupeeInputProps}
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
-                  placeholder="How much are you sending?"
-                  className="w-full pl-9 pr-4 py-2 bg-inset border border-line rounded-lg text-ink placeholder-ink-subtle focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder={`How much are you sending? (max ${describeCap()})`}
+                  className="w-full pl-9 pr-4 py-2.5 rounded-xl transition-all duration-150"
+                  style={{ background: "var(--inset)", border: "1px solid var(--line)", color: "var(--ink)" }}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = "color-mix(in oklab, var(--brand) 50%, transparent)";
+                    e.target.style.boxShadow = "0 0 0 3px color-mix(in oklab, var(--brand) 15%, transparent)";
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = "var(--line)";
+                    e.target.style.boxShadow = "none";
+                  }}
                 />
               </div>
+              {amountProblem(amount) && (
+                <p className="text-xs mt-1.5" style={{ color: "var(--warn)" }}>
+                  {amountProblem(amount)}
+                </p>
+              )}
             </div>
 
-            {/* ── Coercion context ──────────────────────────────────────────
-                The payer's own answer to "why are you paying?" and, if they
-                choose, the message that prompted it. This is the only stream
-                that can see social engineering: by definition the payer's
-                behaviour looks normal, because they were persuaded. */}
+            {/* Coercion context */}
             {intents.length > 0 && (
-              <div className="pt-4 border-t border-line space-y-3">
+              <div className="pt-4 border-t space-y-3" style={{ borderColor: "var(--line)" }}>
                 <div>
-                  <label className="block text-sm font-medium text-ink-muted mb-1.5">
-                    Why are you paying? <span className="text-ink-subtle font-normal">(optional)</span>
+                  <label className="block text-sm font-semibold mb-1.5" style={{ color: "var(--ink-muted)" }}>
+                    Why are you paying? <span style={{ color: "var(--ink-subtle)", fontWeight: 400 }}>(optional)</span>
                   </label>
                   <div className="flex flex-wrap gap-1.5">
                     {intents.map((option) => {
@@ -179,11 +319,21 @@ export default function PayeeCheck() {
                           key={option.id}
                           type="button"
                           onClick={() => setIntent(active ? "" : option.id)}
-                          className={`px-2.5 py-1.5 rounded-lg border text-xs transition ${
+                          className="px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-all duration-150 hover:scale-[1.02]"
+                          style={
                             active
-                              ? "border-brand bg-brand/10 text-brand font-medium"
-                              : "border-line bg-inset text-ink-muted hover:text-ink hover:border-line-strong"
-                          }`}
+                              ? {
+                                  background: "color-mix(in oklab, var(--brand) 12%, transparent)",
+                                  border: "1px solid color-mix(in oklab, var(--brand) 35%, transparent)",
+                                  color: "var(--brand)",
+                                  boxShadow: "0 2px 8px color-mix(in oklab, var(--brand) 15%, transparent)",
+                                }
+                              : {
+                                  background: "var(--inset)",
+                                  border: "1px solid var(--line)",
+                                  color: "var(--ink-muted)",
+                                }
+                          }
                         >
                           {option.label}
                         </button>
@@ -196,14 +346,15 @@ export default function PayeeCheck() {
                   <button
                     type="button"
                     onClick={() => setShowMessage(true)}
-                    className="flex items-center gap-2 text-xs text-brand hover:underline"
+                    className="flex items-center gap-2 text-xs font-medium hover:underline transition-all"
+                    style={{ color: "var(--brand)" }}
                   >
                     <MessageSquareWarning className="h-3.5 w-3.5" />
                     Someone messaged you about this? Paste it
                   </button>
                 ) : (
                   <div>
-                    <label className="block text-sm font-medium text-ink-muted mb-1.5">
+                    <label className="block text-sm font-semibold mb-1.5" style={{ color: "var(--ink-muted)" }}>
                       The message that asked you to pay
                     </label>
                     <textarea
@@ -211,10 +362,11 @@ export default function PayeeCheck() {
                       onChange={(e) => setMessage(e.target.value)}
                       rows={3}
                       placeholder="Paste the SMS or WhatsApp message here"
-                      className="w-full px-3 py-2 bg-inset border border-line rounded-lg text-ink placeholder-ink-subtle text-sm resize-y"
+                      className="w-full px-3 py-2.5 rounded-xl text-sm resize-y"
+                      style={{ background: "var(--inset)", border: "1px solid var(--line)", color: "var(--ink)" }}
                     />
                     {privacyNote && (
-                      <p className="mt-1.5 flex gap-1.5 text-[11px] text-ink-subtle leading-relaxed">
+                      <p className="mt-1.5 flex gap-1.5 text-[11px] leading-relaxed" style={{ color: "var(--ink-subtle)" }}>
                         <Lock className="h-3 w-3 mt-0.5 shrink-0" />
                         {privacyNote}
                       </p>
@@ -225,7 +377,14 @@ export default function PayeeCheck() {
             )}
 
             {error && (
-              <div className="bg-red-500/10 border border-red-500/20 text-danger text-sm rounded-lg p-3">
+              <div
+                className="text-sm rounded-xl p-3"
+                style={{
+                  background: "color-mix(in oklab, var(--danger) 8%, transparent)",
+                  border: "1px solid color-mix(in oklab, var(--danger) 25%, transparent)",
+                  color: "var(--danger)",
+                }}
+              >
                 {error}
               </div>
             )}
@@ -233,22 +392,45 @@ export default function PayeeCheck() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 text-white font-medium rounded-lg transition flex items-center justify-center gap-2"
+              className="w-full py-3 px-4 font-bold text-white rounded-xl transition-all hover:scale-[1.02] hover:opacity-95 disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-2"
+              style={{
+                background: "linear-gradient(135deg, var(--brand-ink), var(--violet, #7c3aed))",
+                boxShadow: "0 4px 16px var(--glow-brand, rgba(99,102,241,0.35))",
+              }}
             >
-              {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <><ScanLine className="h-4 w-4" /> Check this payee</>}
+              {loading
+                ? <Loader2 className="h-5 w-5 animate-spin" />
+                : <><ScanLine className="h-4 w-4" /> Check this payee</>
+              }
             </button>
           </form>
 
-          <div className="mt-6 pt-5 border-t border-line">
-            <p className="text-xs font-semibold text-ink-subtle uppercase tracking-wider mb-3">
+          {/* Examples */}
+          <div className="mt-6 pt-5 border-t" style={{ borderColor: "var(--line)" }}>
+            <p className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: "var(--ink-subtle)" }}>
               Try an example
             </p>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {EXAMPLES.map((ex) => (
                 <button
                   key={ex.label}
                   onClick={() => { setPayload(ex.value); runCheck(ex.value); }}
-                  className="w-full text-left px-3 py-2 text-sm text-ink-muted bg-inset hover:bg-raised/60 border border-line rounded-lg transition"
+                  className="w-full text-left px-3 py-2.5 text-sm rounded-xl transition-all hover:scale-[1.01]"
+                  style={{
+                    background: "var(--inset)",
+                    border: "1px solid var(--line)",
+                    color: "var(--ink-muted)",
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.background = "var(--raised)";
+                    (e.currentTarget as HTMLButtonElement).style.borderColor = "color-mix(in oklab, var(--brand) 25%, transparent)";
+                    (e.currentTarget as HTMLButtonElement).style.color = "var(--ink)";
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.background = "var(--inset)";
+                    (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--line)";
+                    (e.currentTarget as HTMLButtonElement).style.color = "var(--ink-muted)";
+                  }}
                 >
                   {ex.label}
                 </button>
@@ -257,41 +439,65 @@ export default function PayeeCheck() {
           </div>
         </div>
 
-        {/* Result */}
-        <div className="lg:col-span-2 space-y-6">
-          {result && style ? (
+        {/* ── Result panel ────────────────────────────────────────────── */}
+        <div className="lg:col-span-2 space-y-5">
+          {result && meta ? (
             <>
-              <div className={`border rounded-xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-6 ${style.ring}`}>
+              {/* Verdict card */}
+              <div
+                className="rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-6"
+                style={{
+                  background: meta.gradient,
+                  border: `1px solid ${meta.border}`,
+                  boxShadow: meta.glow,
+                }}
+              >
                 <div className="flex items-start gap-4">
-                  <style.Icon className={`h-12 w-12 shrink-0 mt-1 ${style.text}`} />
+                  <span
+                    className="grid place-items-center h-14 w-14 rounded-2xl shrink-0"
+                    style={{
+                      background: `color-mix(in oklab, ${meta.text} 12%, var(--surface))`,
+                      border: `1px solid ${meta.border}`,
+                    }}
+                  >
+                    <meta.Icon className="h-7 w-7" style={{ color: meta.text }} />
+                  </span>
                   <div>
-                    <h3 className="text-2xl font-bold text-ink">
+                    <h3 className="text-2xl font-extrabold" style={{ color: "var(--ink)" }}>
                       {DECISION_LABEL[result.decision] ?? result.decision}
                     </h3>
-                    <p className="text-ink-muted text-sm mt-1">{result.headline}</p>
+                    <p className="text-sm mt-1" style={{ color: "var(--ink-muted)" }}>{result.headline}</p>
                     {result.payee.vpa && (
-                      <p className="text-xs font-mono text-ink-muted mt-2">
+                      <p className="text-xs font-mono mt-2" style={{ color: "var(--ink-subtle)" }}>
                         {result.payee.vpa}
                         {result.payee.display_name && ` · shown as "${result.payee.display_name}"`}
                       </p>
                     )}
                   </div>
                 </div>
+
+                {/* Circular risk gauge */}
                 <div className="text-center shrink-0">
-                  <div className="text-xs text-ink-muted uppercase font-semibold">Payee risk</div>
-                  <div className="text-5xl font-black text-ink mt-1">{result.risk_score}</div>
-                  <div className="text-xs text-ink-muted mt-1">out of 100</div>
+                  <div className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: "var(--ink-subtle)" }}>
+                    Payee risk
+                  </div>
+                  <RiskGauge score={result.risk_score} color={meta.text} />
                 </div>
               </div>
 
-              {/* The point of the whole feature: independent streams agreeing.
-                  Any one of these alone would only be worth a second look. */}
+              {/* Agreement bonus */}
               {result.agreement?.bonus > 0 && (
-                <div className="rounded-xl border border-brand/25 bg-brand/5 p-5">
-                  <h3 className="text-sm font-semibold text-ink mb-1">
+                <div
+                  className="rounded-2xl p-5"
+                  style={{
+                    background: "color-mix(in oklab, var(--brand) 6%, var(--surface))",
+                    border: "1px solid color-mix(in oklab, var(--brand) 20%, transparent)",
+                  }}
+                >
+                  <h3 className="text-sm font-bold mb-1" style={{ color: "var(--ink)" }}>
                     {result.agreement.families.length} independent checks agree
                   </h3>
-                  <p className="text-xs text-ink-muted leading-relaxed mb-3">
+                  <p className="text-xs leading-relaxed mb-3" style={{ color: "var(--ink-muted)" }}>
                     None of these alone would produce this verdict. They point the same
                     way, and that is what makes it a decision rather than a guess.
                   </p>
@@ -299,7 +505,12 @@ export default function PayeeCheck() {
                     {result.agreement.families.map((family) => (
                       <span
                         key={family}
-                        className="px-2 py-1 rounded-md border border-brand/25 bg-surface text-[11px] text-brand font-medium"
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-semibold"
+                        style={{
+                          background: "color-mix(in oklab, var(--brand) 10%, var(--surface))",
+                          border: "1px solid color-mix(in oklab, var(--brand) 25%, transparent)",
+                          color: "var(--brand)",
+                        }}
                       >
                         {family.replace(/_/g, " ")}
                       </span>
@@ -308,10 +519,12 @@ export default function PayeeCheck() {
                 </div>
               )}
 
-              {/* A message was shared and nothing in it stood out - say so,
-                  rather than letting silence read as an all-clear. */}
+              {/* Message pressure */}
               {result.message_pressure?.supplied && result.message_pressure.weak_only && (
-                <div className="rounded-xl border border-line bg-inset p-4 text-xs text-ink-muted leading-relaxed">
+                <div
+                  className="rounded-xl p-4 text-xs leading-relaxed"
+                  style={{ background: "var(--inset)", border: "1px solid var(--line)", color: "var(--ink-muted)" }}
+                >
                   The message sounds urgent or official, but genuine bank and biller
                   messages do too. Nothing in it is something a real institution would
                   never do, so it was not counted as pressure on its own.
@@ -319,30 +532,52 @@ export default function PayeeCheck() {
               )}
 
               {result.message_pressure?.language_note && (
-                <div className="rounded-xl border border-warn/25 bg-warn/5 p-4 text-xs text-ink-muted leading-relaxed">
+                <div
+                  className="rounded-xl p-4 text-xs leading-relaxed"
+                  style={{
+                    background: "color-mix(in oklab, var(--warn) 6%, transparent)",
+                    border: "1px solid color-mix(in oklab, var(--warn) 25%, transparent)",
+                    color: "var(--ink-muted)",
+                  }}
+                >
                   {result.message_pressure.language_note}
                 </div>
               )}
 
+              {/* Links */}
               {result.links?.found > 0 && (
-                <div className="bg-surface border border-line rounded-xl p-6">
-                  <h3 className="text-sm font-semibold text-ink mb-1">
+                <div
+                  className="rounded-2xl p-6"
+                  style={{ background: "var(--surface)", border: "1px solid var(--line)" }}
+                >
+                  <h3 className="text-sm font-bold mb-1" style={{ color: "var(--ink)" }}>
                     {result.links.found === 1 ? "The link in this" : `${result.links.found} links in this`}
                   </h3>
-                  <p className="text-xs text-ink-subtle mb-4">
+                  <p className="text-xs mb-4" style={{ color: "var(--ink-subtle)" }}>
                     Read from the address only. Nothing here was opened or fetched.
                   </p>
                   <div className="space-y-3">
                     {result.links.links.map((link, i) => (
-                      <div key={i} className="rounded-lg border border-line bg-inset p-3">
-                        <div className="font-mono text-xs text-ink break-all">{link.url}</div>
+                      <div
+                        key={i}
+                        className="rounded-xl p-3"
+                        style={{ background: "var(--inset)", border: "1px solid var(--line)" }}
+                      >
+                        <div className="font-mono text-xs break-all" style={{ color: "var(--ink)" }}>{link.url}</div>
                         <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
-                          <span className="text-ink-subtle">
+                          <span style={{ color: "var(--ink-subtle)" }}>
                             actually goes to{" "}
-                            <span className="font-mono font-semibold text-ink">{link.registrable}</span>
+                            <span className="font-mono font-semibold" style={{ color: "var(--ink)" }}>{link.registrable}</span>
                           </span>
                           {link.claimed_brand && (
-                            <span className="px-1.5 py-0.5 rounded border border-warn/25 bg-warn/10 text-warn">
+                            <span
+                              className="px-1.5 py-0.5 rounded"
+                              style={{
+                                background: "color-mix(in oklab, var(--warn) 10%, transparent)",
+                                border: "1px solid color-mix(in oklab, var(--warn) 25%, transparent)",
+                                color: "var(--warn)",
+                              }}
+                            >
                               claims {link.claimed_brand}
                             </span>
                           )}
@@ -350,10 +585,13 @@ export default function PayeeCheck() {
                         {link.findings.length > 0 && (
                           <ul className="mt-2.5 space-y-1.5">
                             {link.findings.map((f, j) => (
-                              <li key={j} className="text-xs text-ink-muted leading-relaxed flex gap-2">
-                                <span className={`mt-1.5 h-1 w-1 rounded-full shrink-0 ${
-                                  f.severity === "critical" ? "bg-danger"
-                                  : f.severity === "high" ? "bg-warn" : "bg-ink-faint"}`} />
+                              <li key={j} className="text-xs leading-relaxed flex gap-2" style={{ color: "var(--ink-muted)" }}>
+                                <span
+                                  className="mt-1.5 h-1 w-1 rounded-full shrink-0"
+                                  style={{
+                                    background: f.severity === "critical" ? "var(--danger)" : f.severity === "high" ? "var(--warn)" : "var(--ink-faint)",
+                                  }}
+                                />
                                 {f.message}
                               </li>
                             ))}
@@ -366,48 +604,76 @@ export default function PayeeCheck() {
               )}
 
               {/* Findings */}
-              <div className="bg-surface border border-line rounded-xl p-6">
-                <h3 className="text-lg font-semibold text-ink mb-4">What the check found</h3>
-                <ul className="space-y-2.5">
-                  {result.findings.map((f, i) => (
-                    <li key={i} className={`text-sm rounded-lg p-3 border ${SEVERITY_STYLE[f.severity] ?? SEVERITY_STYLE.info}`}>
-                      <span className="uppercase text-[10px] font-bold tracking-wider mr-2 opacity-70">
-                        {f.severity}
-                      </span>
-                      {f.message}
-                    </li>
-                  ))}
+              <div
+                className="rounded-2xl p-6"
+                style={{ background: "var(--surface)", border: "1px solid var(--line)" }}
+              >
+                <h3 className="text-lg font-bold mb-4" style={{ color: "var(--ink)" }}>What the check found</h3>
+                <ul className="space-y-2">
+                  {result.findings.map((f, i) => {
+                    const sm = SEVERITY_META[f.severity] ?? SEVERITY_META.info;
+                    return (
+                      <li
+                        key={i}
+                        className="text-sm rounded-xl p-3.5"
+                        style={{ background: sm.bg, border: `1px solid ${sm.border}`, color: sm.text }}
+                      >
+                        <span className="uppercase text-[10px] font-bold tracking-wider mr-2 opacity-80">
+                          {f.severity}
+                        </span>
+                        <span style={{ color: "var(--ink-muted)" }}>{f.message}</span>
+                      </li>
+                    );
+                  })}
                   {result.findings.length === 0 && (
-                    <li className="text-sm text-ink-muted">Nothing stood out about this payee.</li>
+                    <li className="text-sm" style={{ color: "var(--ink-muted)" }}>Nothing stood out about this payee.</li>
                   )}
                 </ul>
               </div>
 
               {/* Reputation */}
-              <div className="bg-surface border border-line rounded-xl p-6">
-                <h3 className="text-lg font-semibold text-ink mb-1">Payee history</h3>
-                <p className="text-xs text-ink-subtle mb-4">
+              <div
+                className="rounded-2xl p-6"
+                style={{ background: "var(--surface)", border: "1px solid var(--line)" }}
+              >
+                <h3 className="text-lg font-bold mb-1" style={{ color: "var(--ink)" }}>Payee history</h3>
+                <p className="text-xs mb-4" style={{ color: "var(--ink-subtle)" }}>
                   Pooled across everyone using this system. A single wallet app cannot see this.
                 </p>
 
                 {rep?.known ? (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     {[
-                      { Icon: CalendarClock, label: "First seen", value: rep.age_days !== null ? `${rep.age_days} days ago` : "unknown" },
-                      { Icon: Users, label: "People who paid", value: String(rep.distinct_payers) },
-                      { Icon: Repeat, label: "Paid more than once", value: String(rep.repeat_payers) },
-                      { Icon: Flag, label: "Reports", value: String(rep.reports) },
+                      { Icon: CalendarClock, label: "First seen",       value: rep.age_days !== null ? `${rep.age_days}d ago` : "unknown" },
+                      { Icon: Users,         label: "People who paid",  value: String(rep.distinct_payers) },
+                      { Icon: Repeat,        label: "Paid > once",      value: String(rep.repeat_payers) },
+                      { Icon: Flag,          label: "Reports",          value: String(rep.reports) },
                     ].map(({ Icon, label, value }) => (
-                      <div key={label} className="bg-inset border border-line/60 rounded-lg p-3">
-                        <Icon className="h-4 w-4 text-brand mb-2" />
-                        <div className="text-lg font-bold text-ink leading-tight">{value}</div>
-                        <div className="text-[11px] text-ink-subtle mt-0.5">{label}</div>
+                      <div
+                        key={label}
+                        className="rounded-xl p-3.5"
+                        style={{ background: "var(--inset)", border: "1px solid var(--line)" }}
+                      >
+                        <span
+                          className="grid place-items-center h-7 w-7 rounded-lg mb-2"
+                          style={{
+                            background: "linear-gradient(135deg, color-mix(in oklab, var(--brand) 15%, var(--raised)), color-mix(in oklab, var(--violet, #7c3aed) 10%, var(--raised)))",
+                            border: "1px solid color-mix(in oklab, var(--brand) 20%, transparent)",
+                          }}
+                        >
+                          <Icon className="h-3.5 w-3.5" style={{ color: "var(--brand)" }} />
+                        </span>
+                        <div className="text-lg font-extrabold leading-tight" style={{ color: "var(--ink)" }}>{value}</div>
+                        <div className="text-[10px] mt-0.5 font-medium" style={{ color: "var(--ink-subtle)" }}>{label}</div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="flex items-start gap-3 text-sm text-ink-muted bg-inset border border-line rounded-lg p-4">
-                    <Info className="h-5 w-5 shrink-0 text-ink-subtle mt-0.5" />
+                  <div
+                    className="flex items-start gap-3 text-sm rounded-xl p-4"
+                    style={{ background: "var(--inset)", border: "1px solid var(--line)", color: "var(--ink-muted)" }}
+                  >
+                    <Info className="h-5 w-5 shrink-0 mt-0.5" style={{ color: "var(--ink-subtle)" }} />
                     <span>
                       Nobody using this system has paid this address before. That is normal for a
                       new shop, and it is also what a freshly created account looks like.
@@ -419,7 +685,18 @@ export default function PayeeCheck() {
                   <button
                     onClick={reportPayee}
                     disabled={reported}
-                    className="mt-5 flex items-center gap-2 text-sm px-4 py-2 rounded-lg border border-line text-ink-muted hover:bg-raised/60 disabled:opacity-50 disabled:cursor-default transition"
+                    className="mt-4 flex items-center gap-2 text-sm px-4 py-2.5 rounded-xl transition-all hover:scale-[1.02] disabled:opacity-50 disabled:scale-100"
+                    style={{ border: "1px solid var(--line)", color: "var(--ink-muted)", background: "var(--inset)" }}
+                    onMouseEnter={(e) => {
+                      if (!reported) {
+                        (e.currentTarget as HTMLButtonElement).style.background = "var(--raised)";
+                        (e.currentTarget as HTMLButtonElement).style.color = "var(--ink)";
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.background = "var(--inset)";
+                      (e.currentTarget as HTMLButtonElement).style.color = "var(--ink-muted)";
+                    }}
                   >
                     <Flag className="h-4 w-4" />
                     {reported ? "Reported — thank you" : "Report this payee"}
@@ -428,35 +705,49 @@ export default function PayeeCheck() {
               </div>
 
               {/* Score breakdown */}
-              <div className="bg-surface border border-line rounded-xl p-6">
-                <h3 className="text-sm font-semibold text-ink mb-4">Where the score came from</h3>
-                <div className="space-y-3">
+              <div
+                className="rounded-2xl p-6"
+                style={{ background: "var(--surface)", border: "1px solid var(--line)" }}
+              >
+                <h3 className="text-sm font-bold mb-5" style={{ color: "var(--ink)" }}>Where the score came from</h3>
+                <div className="space-y-4">
                   {[
-                    ["Address and QR contents", result.component_scores.address_and_qr],
-                    ["Payee history", result.component_scores.payee_history],
-                    ["Amount in context", result.component_scores.amount_context],
+                    ["Address and QR contents",      result.component_scores.address_and_qr],
+                    ["Payee history",                result.component_scores.payee_history],
+                    ["Amount in context",            result.component_scores.amount_context],
                     ["What you said you were doing", result.component_scores.stated_intent],
-                    ["Pressure in the message", result.component_scores.message_pressure],
-                    ["Links in it", result.component_scores.link_safety],
-                  ].map(([label, value]) => (
-                    <div key={label as string}>
-                      <div className="flex justify-between text-xs text-ink-muted mb-1">
-                        <span>{label}</span>
-                        <span className="font-mono text-ink-muted">{value as number}</span>
-                      </div>
-                      <div className="h-1.5 bg-inset rounded-full overflow-hidden">
+                    ["Pressure in the message",      result.component_scores.message_pressure],
+                    ["Links in it",                  result.component_scores.link_safety],
+                  ].map(([label, value]) => {
+                    const pct = Math.min(100, value as number);
+                    const barColor = pct >= 70 ? "var(--danger)" : pct >= 40 ? "var(--warn)" : "var(--ok)";
+                    return (
+                      <div key={label as string}>
+                        <div className="flex justify-between text-xs mb-1.5">
+                          <span style={{ color: "var(--ink-muted)" }}>{label}</span>
+                          <span className="font-mono font-bold" style={{ color: "var(--ink)" }}>{value as number}</span>
+                        </div>
                         <div
-                          className="h-full bg-indigo-500 rounded-full"
-                          style={{ width: `${Math.min(100, value as number)}%` }}
-                        />
+                          className="h-2 rounded-full overflow-hidden"
+                          style={{ background: "var(--raised)" }}
+                        >
+                          <div
+                            className="h-full rounded-full transition-all duration-700"
+                            style={{
+                              width: `${pct}%`,
+                              background: `linear-gradient(to right, ${barColor}, color-mix(in oklab, ${barColor} 75%, var(--violet, #7c3aed)))`,
+                              boxShadow: `0 0 6px color-mix(in oklab, ${barColor} 40%, transparent)`,
+                            }}
+                          />
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 {result.payer_behaviour && (
-                  <p className="text-xs text-ink-subtle mt-4 pt-4 border-t border-line">
+                  <p className="text-xs mt-4 pt-4 border-t" style={{ borderColor: "var(--line)", color: "var(--ink-subtle)" }}>
                     Against your own history this payment scores{" "}
-                    <span className="text-ink-muted font-semibold">
+                    <span className="font-bold" style={{ color: "var(--ink-muted)" }}>
                       {result.payer_behaviour.risk_score} ({result.payer_behaviour.risk_level})
                     </span>.
                   </p>
@@ -464,10 +755,35 @@ export default function PayeeCheck() {
               </div>
             </>
           ) : (
-            <div className="bg-surface/40 border border-line rounded-xl p-12 text-center h-full flex flex-col justify-center items-center">
-              <ScanLine className="h-16 w-16 text-ink-faint mb-4" />
-              <h3 className="text-lg font-semibold text-ink mb-1">Check before you pay</h3>
-              <p className="text-ink-muted max-w-md text-sm">
+            /* Empty state */
+            <div
+              className="rounded-2xl p-12 text-center h-full flex flex-col justify-center items-center"
+              style={{ background: "color-mix(in oklab, var(--surface) 50%, transparent)", border: "1px solid var(--line)" }}
+            >
+              {/* Animated scan icon */}
+              <div className="relative mb-6">
+                <div
+                  className="h-20 w-20 rounded-2xl flex items-center justify-center"
+                  style={{
+                    background: "linear-gradient(135deg, color-mix(in oklab, var(--brand) 10%, var(--raised)), color-mix(in oklab, var(--violet, #7c3aed) 8%, var(--raised)))",
+                    border: "1px solid color-mix(in oklab, var(--brand) 20%, transparent)",
+                    boxShadow: "0 0 30px color-mix(in oklab, var(--brand) 15%, transparent)",
+                  }}
+                >
+                  <ScanLine className="h-9 w-9" style={{ color: "var(--brand)" }} />
+                </div>
+                {/* Orbiting ring */}
+                <div
+                  className="absolute inset-0 rounded-2xl"
+                  style={{
+                    border: "1px solid color-mix(in oklab, var(--brand) 15%, transparent)",
+                    transform: "scale(1.15)",
+                    animation: "pulse-glow 3s ease-in-out infinite",
+                  }}
+                />
+              </div>
+              <h3 className="text-lg font-bold mb-1.5" style={{ color: "var(--ink)" }}>Check before you pay</h3>
+              <p className="max-w-md text-sm" style={{ color: "var(--ink-muted)" }}>
                 Paste a UPI ID or the contents of a QR code on the left, or try one of the
                 examples, to see what this system knows about the payee.
               </p>

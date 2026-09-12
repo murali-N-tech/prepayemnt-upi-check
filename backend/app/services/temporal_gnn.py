@@ -18,13 +18,23 @@ def temporal_patterns(df: pd.DataFrame) -> dict[str, int]:
         return {}
 
     frame = df.copy()
-    # Some rows carry a timezone and some do not. Without utc=True pandas
-    # returns an object column for that mixture and .dt stops working, so the
-    # parse is normalised to UTC. Naive values keep their clock hour, which is
-    # what an hour-of-day chart is reading.
-    frame["timestamp"] = pd.to_datetime(
-        frame["timestamp"], errors="coerce", format="mixed", utc=True
+    # Some rows carry a timezone offset and some do not, and pandas returns an
+    # object column for that mixture, which breaks .dt. utc=True fixed the dtype
+    # but introduced a worse bug: it CONVERTS an offset-bearing value, so
+    # "2026-06-01T02:30:00+05:30" was binned at hour 21 while the naive row
+    # beside it stayed at hour 2. The chart then mixed IST hours and UTC hours
+    # in the same 24 buckets.
+    #
+    # This is an hour-of-day chart, so the hour wanted is the one on the clock
+    # the payer was looking at - which is exactly what the string already says.
+    # Dropping the offset before parsing keeps that hour and gives a uniform
+    # naive dtype at the same time.
+    naive = (
+        frame["timestamp"]
+        .astype("string")
+        .str.replace(r"(?:Z|[+-]\d{2}:?\d{2})\s*$", "", regex=True)
     )
+    frame["timestamp"] = pd.to_datetime(naive, errors="coerce", format="mixed")
     frame = frame.loc[frame["timestamp"].notna()]
     if frame.empty:
         return {}

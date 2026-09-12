@@ -42,9 +42,9 @@ from typing import Any, Optional
 from urllib.parse import unquote, urlsplit
 
 from backend.app.services.vpa import (
+    total_weight,
     LURE_WORDS,
     PROTECTED_NAMES,
-    SEVERITY_WEIGHT,
     VpaFinding,
     _edit_distance,
     canonical,
@@ -86,6 +86,18 @@ LEGITIMATE_DOMAINS: dict[str, tuple[str, ...]] = {
     "airtel": ("airtel.in",),
     "zerodha": ("zerodha.com",),
     "groww": ("groww.in",),
+    # Without these, the brand is recognised but has no reference domains, so
+    # "unionbank-kyc-verify.xyz" scored 36 where "sbi-kyc-verify.xyz" scored
+    # 71 - the same attack, graded differently by an accident of this table.
+    "unionbank": ("unionbankofindia.co.in", "onlineunionbank.co.in"),
+    "mobikwik": ("mobikwik.com",),
+    "myntra": ("myntra.com",),
+    "bigbasket": ("bigbasket.com",),
+    "vodafone": ("myvi.in", "vodafone.in"),
+    "netflix": ("netflix.com",),
+    "upstox": ("upstox.com",),
+    "pmkisan": ("pmkisan.gov.in",),
+    "bhim": ("bhimupi.org.in", "npci.org.in"),
 }
 
 # PROTECTED_NAMES carries several spellings of the same bank (sbi/statebank,
@@ -124,13 +136,24 @@ _MULTI_SUFFIXES: frozenset[str] = frozenset({
     "nic.in", "ac.in", "edu.in", "res.in", "co.uk", "org.uk", "com.au",
 })
 
+_TLD_RE = r"(?:com|in|org|net|co|gov|edu|io|me|info|biz|app|dev|xyz|top|tk|ml|ga|cf|gq|buzz|click|link|work|rest|icu|cyou|sbs|fit|site|online|store|shop|live|club|fun|cc|ly|gl|to|sbi|bank|uk|us|au|ru|cn)"
+
+# A hostname must end in a plausible TLD. Without that constraint the bare-host
+# alternative matched ordinary prose ("blocked.Verify") and any UPI ID with a
+# dot in the local part ("priya.sharma@okaxis" -> "priya.sharma"), inventing a
+# link finding on a completely normal payment.
+#
+# upi:// is deliberately NOT matched here: a deep link is upi_qr.py's job, and
+# the greedy match swallowed the url= parameter it carries - the one link that
+# most needed analysing.
 _URL_RE = re.compile(
-    r"""(?xi)
-    \b(
-        (?:https?://|upi://)[^\s<>"']+          # explicit scheme
-      | (?:www\.)[^\s<>"']+                     # www.something
-      | (?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)+   # host.tld/path
-        (?:[a-z]{2,24})(?:/[^\s<>"']*)?
+    rf"""(?xi)
+    (?:
+        (?:https?://)[^\s<>"']+                                  # explicit scheme
+      | (?<![\w@.])www\.[^\s<>"']+                               # www.something
+      | (?<![\w@.])
+        (?:[a-z0-9](?:[a-z0-9\-]{{0,61}}[a-z0-9])?\.)+            # host.
+        {_TLD_RE}\b(?:/[^\s<>"']*)?                              # tld[/path]
     )
     """
 )
@@ -212,7 +235,7 @@ class LinkVerdict:
 
     @property
     def score(self) -> int:
-        return min(100, sum(SEVERITY_WEIGHT[f.severity] for f in self.findings))
+        return total_weight(self.findings)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -263,7 +286,7 @@ def extract_urls(text: Optional[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for match in _URL_RE.finditer(text):
-        raw = match.group(1).rstrip(".,;:!?)\"'")
+        raw = match.group(0).rstrip(".,;:!?)\"'")
         if _NOT_A_HOST.search(raw):
             continue
         if raw.lower() in seen:
@@ -294,7 +317,19 @@ def registrable_domain(host: str) -> str:
 
 
 _IPV4 = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
-_CANON_BRANDS = {canonical(name): name for name in PROTECTED_NAMES}
+# Sorted so the mapping is deterministic: PROTECTED_NAMES is a set, and the
+# substring scan below used to return a different brand run to run.
+_CANON_BRANDS = {canonical(name): name for name in sorted(PROTECTED_NAMES)}
+# Separators a brand is glued to in a phishing host: sbi-verify, paytm_refund,
+# icicikyc. Requiring one of these (or a whole label) stops a three-letter
+# brand matching inside an unrelated word - "gstatic.com" is not "gst".
+# The canonical first label of every domain each brand really uses, for the
+# look-alike comparison.
+_CANON_DOMAIN_LABELS: dict[str, tuple[str, ...]] = {
+    brand: tuple(canonical(d.split(".", 1)[0]) for d in domains)
+    for brand, domains in LEGITIMATE_DOMAINS.items()
+}
+_LURE_CANON = tuple(sorted({canonical(w) for w in LURE_WORDS if len(canonical(w)) >= 3}))
 
 
 def _brand_claimed_by(host: str) -> Optional[str]:
@@ -303,9 +338,27 @@ def _brand_claimed_by(host: str) -> Optional[str]:
         folded = canonical(label)
         if folded in _CANON_BRANDS:
             return _CANON_BRANDS[folded]
-        # A brand glued to another word: sbi-verify, paytmrefund.
+    # A look-alike of a domain the brand really uses. canonical() folds the
+    # homoglyphs, so "0nlinesbi" and "onlinesbi" compare equal here - the same
+    # mechanism that catches okaxls for okaxis.
+    for label in host.split("."):
+        folded = canonical(label)
+        if len(folded) < 4:
+            continue
+        for brand, domains in _CANON_DOMAIN_LABELS.items():
+            if any(_edit_distance(folded, d) <= 1 for d in domains):
+                return brand
+
+    # A brand glued to a lure word is the phishing shape: sbi-verify,
+    # paytm-refund, icici-kyc. A bare substring is not - "gstatic" contains
+    # "gst" and "flipkartner" would contain "flipkart", and neither is a claim.
+    for label in host.split("."):
+        folded = canonical(label)
         for canon_brand, brand in _CANON_BRANDS.items():
-            if len(canon_brand) >= 3 and canon_brand in folded:
+            if len(canon_brand) < 3 or canon_brand not in folded:
+                continue
+            remainder = folded.replace(canon_brand, "", 1)
+            if not remainder or any(lure in remainder for lure in _LURE_CANON):
                 return brand
     return None
 
@@ -375,6 +428,10 @@ def analyse_url(url: str) -> LinkVerdict:
         else:
             features["brand_not_on_own_domain"] = 1
 
+    # Outside the reference-domain branch on purpose: "unionbank-kyc-verify.xyz"
+    # is the same attack as "sbi-kyc-verify.xyz", and the only difference was
+    # that one brand happened to be missing from LEGITIMATE_DOMAINS.
+    if brand:
         folded_host = canonical(host)
         if any(canonical(word) in folded_host for word in LURE_WORDS):
             features["lure_in_host"] = 1
@@ -432,9 +489,13 @@ def brand_conflicts_with_payee(analysis: LinkAnalysis, payee_vpa: Optional[str])
     if not brands:
         return None
 
-    folded_payee = canonical(payee_vpa)
+    # Compare the LOCAL part only. "@oksbi" is the Google Pay handle held by
+    # every SBI customer, so folding the whole address in made canonical()
+    # contain "sbi" and cancelled the conflict for a large share of real
+    # payees. The handle says which bank issued the address, not who is paid.
+    local_part = canonical(payee_vpa.split("@", 1)[0])
     for brand in brands:
-        if canonical(brand) in folded_payee:
+        if canonical(brand) in local_part:
             return None      # link and payee agree - no conflict
 
     named = ", ".join(sorted(brands))

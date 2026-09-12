@@ -16,10 +16,17 @@ def evaluate_personalized_risk(
     timestamp: str,
     upi_id: str | None = None,
     location: str | None = None,
+    already_recorded: bool = False,
 ) -> dict[str, Any]:
+    """`already_recorded` is True when this payment is already in `history` -
+    the /monitor path re-scores stored rows, the pre-payment path does not."""
     event_time = pd.to_datetime(timestamp, errors="coerce")
     if pd.isna(event_time):
-        event_time = pd.Timestamp.utcnow()
+        # Local, not UTC. Profile hours come from statement timestamps in local
+        # time, and callers pass a local clock; utcnow() shifted the night
+        # window by the UTC offset, so a 02:30 IST payment read as 21:00 and
+        # the night rule did not fire.
+        event_time = pd.Timestamp.now()
 
     if not profile or profile.get("transaction_count", 0) == 0:
         baseline_risk = 35 if amount > 10000 else 20
@@ -54,16 +61,20 @@ def evaluate_personalized_risk(
     }
 
     if avg_amount > 0:
-        amount_multiple = round(amount / avg_amount, 2)
+        # Compare the exact ratio and round only for display: rounding first
+        # put 14.996 into the >= 15 band, an 11-point jump from a display
+        # artefact that could cross the MEDIUM boundary on its own.
+        exact_multiple = amount / avg_amount
+        amount_multiple = round(exact_multiple, 2)
         comparison["amount_multiple"] = amount_multiple
 
-        if amount_multiple >= 15:
+        if exact_multiple >= 15:
             score += 35
             reasons.append(f"Amount is {amount_multiple}x higher than the user's average payment")
-        elif amount_multiple >= 8:
+        elif exact_multiple >= 8:
             score += 24
             reasons.append(f"Amount is {amount_multiple}x above the usual pattern")
-        elif amount_multiple >= 3:
+        elif exact_multiple >= 3:
             score += 12
             reasons.append(f"Amount is materially above the user's average transaction size")
 
@@ -106,11 +117,16 @@ def evaluate_personalized_risk(
         score += 12
         reasons.append("Transaction time falls in the user's higher-risk night window")
 
-    if most_active_hour is not None and abs(hour - int(most_active_hour)) >= 8:
+    # Clock distance is circular. Straight subtraction made 02:00 look 21
+    # hours from a 23:00 baseline instead of 3, so a night-shift user was
+    # penalised on every ordinary payment. Every other hour comparison in this
+    # codebase (ml/features.py, ml/dataset.py) already does this correctly.
+    _hour_gap = abs(hour - int(most_active_hour)) if most_active_hour is not None else 0
+    if most_active_hour is not None and min(_hour_gap, 24 - _hour_gap) >= 8:
         score += 8
         reasons.append("Transaction time is far from the user's most active payment hour")
 
-    daily_velocity = _projected_daily_velocity(history, event_time)
+    daily_velocity = _projected_daily_velocity(history, event_time, already_recorded)
     comparison["projected_daily_transactions"] = daily_velocity
     if avg_daily_transactions > 0 and daily_velocity > max(avg_daily_transactions * 3, avg_daily_transactions + 6):
         score += 18
@@ -139,14 +155,23 @@ def evaluate_personalized_risk(
     }
 
 
-def _projected_daily_velocity(history: pd.DataFrame, event_time: pd.Timestamp) -> int:
+def _projected_daily_velocity(history: pd.DataFrame, event_time: pd.Timestamp,
+                              counts_this_payment: bool = False) -> int:
+    """Payments this payer has made today, including the one being scored.
+
+    `counts_this_payment` says whether the payment is ALREADY in `history`.
+    For a pre-payment check it is not, so one is added; for a stored
+    transaction being re-scored it is, and adding one counted it twice -
+    which pushed ordinary days over the velocity threshold and reported a
+    number one higher than the truth back to the user.
+    """
     if history.empty or "timestamp" not in history.columns:
         return 1
 
     history = history.copy()
     history["timestamp"] = pd.to_datetime(history["timestamp"], errors="coerce")
     same_day = history["timestamp"].dt.date == event_time.date()
-    return int(same_day.sum()) + 1
+    return int(same_day.sum()) + (0 if counts_this_payment else 1)
 
 
 def _level_from_score(score: float) -> str:

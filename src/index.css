@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
 /* The theme is driven by a `dark` class on <html>, set by ThemeContext, so a
@@ -8,11 +8,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ───────────────────────────────────────────────────────────────────────────
-   Semantic colour tokens.
-
-   Components name the ROLE a colour plays - surface, line, ink, danger - and
-   never the shade. That is what makes one set of components render correctly
-   in both themes: only the two blocks below change, and every screen follows.
+   Semantic colour tokens — Premium Extended Palette
 
    Roles, from back to front:
      canvas   the page itself
@@ -24,98 +20,203 @@
 :root {
   color-scheme: light;
 
-  --canvas: #f4f6fa;
+  --canvas:  #f0f4fb;
   --surface: #ffffff;
-  --raised: #eef1f7;
-  --inset: #f8fafc;
+  --raised:  #eef1f8;
+  --inset:   #f6f8fc;
 
-  --line: #e3e8ef;
+  --line:        #e2e8f0;
   --line-strong: #cbd5e1;
 
-  --ink: #0b1220;
-  --ink-muted: #4a586b;
+  --ink:        #0b1220;
+  --ink-muted:  #4a586b;
   --ink-subtle: #6b7a90;
-  --ink-faint: #c2cbd8;
+  --ink-faint:  #c2cbd8;
 
-  --brand: #4f46e5;
-  /* The fill behind white button text. Fixed across themes on purpose: a
-     solid button carries its own background, so it must not follow the page
-     or the label loses contrast on one side. */
-  --brand-ink: #4f46e5;
+  /* Primary brand — vivid indigo */
+  --brand:     #4f46e5;
+  --brand-ink: #4338ca;
+  --brand-light: #818cf8;
+
+  /* Extended palette */
+  --violet:  #7c3aed;
+  --pink:    #db2777;
+  --cyan:    #0891b2;
+
   --danger: #dc2626;
-  --warn: #b45309;
-  --ok: #047857;
+  --warn:   #b45309;
+  --ok:     #047857;
 
-  --ring: #6366f1;
-  --shadow-color: 220 40% 20%;
-  --shadow-strength: 0.06;
+  --ring:           #6366f1;
+  --shadow-color:   220 40% 20%;
+  --shadow-strength: 0.07;
+
+  /* Gradient stops */
+  --g-from: #4f46e5;
+  --g-mid:  #7c3aed;
+  --g-to:   #db2777;
+
+  /* Glow */
+  --glow-brand:  rgba(99, 102, 241, 0.35);
+  --glow-ok:     rgba(4, 120, 87, 0.35);
+  --glow-danger: rgba(220, 38, 38, 0.35);
+  --glow-warn:   rgba(180, 83, 9, 0.35);
 }
 
 .dark {
   color-scheme: dark;
 
-  --canvas: #060a14;
-  --surface: #0f172a;
-  --raised: #1e293b;
-  --inset: #0b1220;
+  --canvas:  #05081a;
+  --surface: #0d1225;
+  --raised:  #151c35;
+  --inset:   #0a0f1e;
 
-  --line: #1e293b;
-  --line-strong: #334155;
+  --line:        #1e2a48;
+  --line-strong: #2d3d60;
 
-  --ink: #f8fafc;
-  --ink-muted: #94a3b8;
-  --ink-subtle: #64748b;
-  --ink-faint: #334155;
+  --ink:        #e8edf8;
+  --ink-muted:  #8896b0;
+  --ink-subtle: #56678a;
+  --ink-faint:  #2d3d60;
 
-  --brand: #818cf8;
-  --brand-ink: #4f46e5;
-  --danger: #fb7185;
-  --warn: #fbbf24;
-  --ok: #34d399;
+  --brand:       #818cf8;
+  --brand-ink:   #4f46e5;
+  --brand-light: #a5b4fc;
 
-  --ring: #6366f1;
-  --shadow-color: 220 60% 2%;
-  --shadow-strength: 0.5;
+  --violet:  #a78bfa;
+  --pink:    #f472b6;
+  --cyan:    #22d3ee;
+
+  --danger: #f87171;
+  --warn:   #fbbf24;
+  --ok:     #34d399;
+
+  --ring:           #818cf8;
+  --shadow-color:   220 70% 2%;
+  --shadow-strength: 0.6;
+
+  --g-from: #818cf8;
+  --g-mid:  #a78bfa;
+  --g-to:   #f472b6;
+
+  --glow-brand:  rgba(129, 140, 248, 0.25);
+  --glow-ok:     rgba(52, 211, 153, 0.25);
+  --glow-danger: rgba(248, 113, 113, 0.25);
+  --glow-warn:   rgba(251, 191, 36, 0.25);
 }
 
 @theme inline {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 
-  --color-canvas: var(--canvas);
-  --color-surface: var(--surface);
-  --color-raised: var(--raised);
-  --color-inset: var(--inset);
+  --color-canvas:      var(--canvas);
+  --color-surface:     var(--surface);
+  --color-raised:      var(--raised);
+  --color-inset:       var(--inset);
 
-  --color-line: var(--line);
+  --color-line:        var(--line);
   --color-line-strong: var(--line-strong);
 
-  --color-ink: var(--ink);
-  --color-ink-muted: var(--ink-muted);
-  --color-ink-subtle: var(--ink-subtle);
-  --color-ink-faint: var(--ink-faint);
+  --color-ink:         var(--ink);
+  --color-ink-muted:   var(--ink-muted);
+  --color-ink-subtle:  var(--ink-subtle);
+  --color-ink-faint:   var(--ink-faint);
 
-  --color-brand: var(--brand);
-  --color-brand-ink: var(--brand-ink);
-  --color-danger: var(--danger);
-  --color-warn: var(--warn);
-  --color-ok: var(--ok);
+  --color-brand:       var(--brand);
+  --color-brand-ink:   var(--brand-ink);
+  --color-brand-light: var(--brand-light);
+  --color-danger:      var(--danger);
+  --color-warn:        var(--warn);
+  --color-ok:          var(--ok);
+  --color-violet:      var(--violet);
+  --color-pink:        var(--pink);
+  --color-cyan:        var(--cyan);
 
-  --animate-fade-in: fade-in 0.35s ease-out both;
-  --animate-rise: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-fade-in:   fade-in 0.35s ease-out both;
+  --animate-rise:      rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-scale-in:  scale-in 0.2s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-shimmer:   shimmer 2.5s linear infinite;
+  --animate-pulse-glow: pulse-glow 2.5s ease-in-out infinite;
+  --animate-float:     float 6s ease-in-out infinite;
+  --animate-spin-slow: spin 8s linear infinite;
 }
 
+/* ── Keyframes ─────────────────────────────────────────────────────────────── */
+
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(10px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes rise {
-  from { opacity: 0; transform: translateY(18px); }
+  from { opacity: 0; transform: translateY(22px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ─────────────────────────────────────────────────────────────────────────── */
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes shimmer {
+  from { background-position: -200% center; }
+  to   { background-position: 200% center; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 var(--glow-brand); }
+  50%       { box-shadow: 0 0 20px 6px var(--glow-brand); }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px) rotateX(0deg) rotateY(0deg);
+  }
+  25% {
+    transform: translateY(-12px) rotateX(8deg) rotateY(15deg);
+  }
+  50% {
+    transform: translateY(-6px) rotateX(-5deg) rotateY(-10deg);
+  }
+  75% {
+    transform: translateY(-16px) rotateX(10deg) rotateY(5deg);
+  }
+}
+
+@keyframes shape-spin {
+  from { transform: rotateX(30deg) rotateY(0deg) rotateZ(0deg); }
+  to   { transform: rotateX(30deg) rotateY(360deg) rotateZ(360deg); }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.12; filter: blur(80px); }
+  50%       { opacity: 0.22; filter: blur(60px); }
+}
+
+@keyframes blob-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%       { transform: translate(30px, -20px) scale(1.08); }
+  66%       { transform: translate(-20px, 15px) scale(0.96); }
+}
+
+@keyframes scan-line {
+  0%   { top: 0%; opacity: 1; }
+  90%  { top: 90%; opacity: 1; }
+  100% { top: 90%; opacity: 0; }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes gradient-shift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* ── Base ───────────────────────────────────────────────────────────────────── */
 
 html {
   background-color: var(--canvas);
@@ -132,8 +233,8 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* One shadow scale, tinted by theme, so cards read as lifted in light mode
-   and as merely separated in dark mode where a drop shadow is invisible. */
+/* ── Shadow Scale ────────────────────────────────────────────────────────────── */
+
 .shadow-card {
   box-shadow:
     0 1px 2px hsl(var(--shadow-color) / var(--shadow-strength)),
@@ -143,43 +244,210 @@ body {
 .shadow-lift {
   box-shadow:
     0 2px 4px hsl(var(--shadow-color) / var(--shadow-strength)),
-    0 12px 28px -8px hsl(var(--shadow-color) / calc(var(--shadow-strength) * 1.1));
+    0 12px 28px -8px hsl(var(--shadow-color) / calc(var(--shadow-strength) * 1.2));
 }
 
-/* Focus is drawn once, here, so every control agrees. */
+.shadow-glow-brand {
+  box-shadow:
+    0 0 0 1px var(--glow-brand),
+    0 4px 16px var(--glow-brand),
+    0 12px 40px -8px var(--glow-brand);
+}
+
+.shadow-glow-ok {
+  box-shadow:
+    0 0 0 1px var(--glow-ok),
+    0 4px 16px var(--glow-ok);
+}
+
+.shadow-glow-danger {
+  box-shadow:
+    0 0 0 1px var(--glow-danger),
+    0 4px 16px var(--glow-danger);
+}
+
+.shadow-glow-warn {
+  box-shadow:
+    0 0 0 1px var(--glow-warn),
+    0 4px 16px var(--glow-warn);
+}
+
+/* ── Glassmorphism ───────────────────────────────────────────────────────────── */
+
+.glass {
+  background: color-mix(in oklab, var(--surface) 70%, transparent);
+  backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  border: 1px solid color-mix(in oklab, var(--line) 80%, transparent);
+}
+
+.glass-subtle {
+  background: color-mix(in oklab, var(--surface) 50%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid color-mix(in oklab, var(--line) 60%, transparent);
+}
+
+/* ── Gradient Text ────────────────────────────────────────────────────────────── */
+
+.gradient-text {
+  background: linear-gradient(135deg, var(--g-from) 0%, var(--g-mid) 50%, var(--g-to) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gradient-text-animate {
+  background: linear-gradient(135deg, var(--g-from), var(--g-mid), var(--g-to), var(--g-from));
+  background-size: 300% 300%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: gradient-shift 4s ease infinite;
+}
+
+/* ── Gradient Backgrounds ────────────────────────────────────────────────────── */
+
+.gradient-brand {
+  background: linear-gradient(135deg, var(--g-from) 0%, var(--g-mid) 50%, var(--g-to) 100%);
+}
+
+.gradient-brand-subtle {
+  background: linear-gradient(135deg,
+    color-mix(in oklab, var(--g-from) 12%, transparent),
+    color-mix(in oklab, var(--g-mid) 8%, transparent)
+  );
+}
+
+.gradient-border {
+  position: relative;
+  background: var(--surface);
+}
+
+.gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--g-from), var(--g-mid), var(--g-to));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* ── Hero Grid (enhanced) ─────────────────────────────────────────────────────── */
+
+.hero-grid {
+  background-image:
+    linear-gradient(to right, var(--line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 80% 70% at 50% 0%, #000 40%, transparent 100%);
+}
+
+/* ── Blob Background ─────────────────────────────────────────────────────────── */
+
+.blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(80px);
+  animation: blob-drift 12s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.blob-brand {
+  background: color-mix(in oklab, var(--brand) 20%, transparent);
+}
+
+.blob-violet {
+  background: color-mix(in oklab, var(--violet) 15%, transparent);
+}
+
+.blob-pink {
+  background: color-mix(in oklab, var(--pink) 12%, transparent);
+}
+
+/* ── Shimmer Effect ───────────────────────────────────────────────────────────── */
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklab, var(--brand) 8%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2.5s linear infinite;
+}
+
+/* ── Focus ────────────────────────────────────────────────────────────────────── */
+
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 ::selection {
-  background: color-mix(in oklab, var(--ring) 30%, transparent);
+  background: color-mix(in oklab, var(--ring) 25%, transparent);
 }
 
-/* Scrollbars follow the theme instead of staying stuck in one of them. */
+/* ── Scrollbars ────────────────────────────────────────────────────────────────── */
+
 * {
   scrollbar-color: var(--line-strong) transparent;
   scrollbar-width: thin;
 }
 
-::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: var(--line-strong);
+  background: linear-gradient(to bottom, var(--brand), var(--violet));
   border-radius: 999px;
-  border: 3px solid var(--canvas);
 }
 
-/* The faint grid behind the landing hero. Drawn in CSS so no image is needed
-   and it re-tints with the theme. */
-.hero-grid {
-  background-image:
-    linear-gradient(to right, var(--line) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--line) 1px, transparent 1px);
-  background-size: 64px 64px;
-  mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
+/* ── Range Inputs ──────────────────────────────────────────────────────────────── */
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--raised);
+  cursor: pointer;
 }
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--g-from), var(--g-mid));
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 6px var(--glow-brand);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  box-shadow: 0 0 12px var(--glow-brand);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--g-from), var(--g-mid));
+  border: 2px solid var(--surface);
+  cursor: pointer;
+}
+
+/* ── Reduced Motion ────────────────────────────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

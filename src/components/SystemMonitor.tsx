@@ -7,6 +7,8 @@ export default function SystemMonitor() {
   const { api } = useAuth();
   const [txs, setTxs] = useState<Transaction[]>([]);
   const [drift, setDrift] = useState<string>("Checking...");
+  const [driftDetail, setDriftDetail] = useState<string | null>(null);
+  const [driftConclusive, setDriftConclusive] = useState(false);
   const [health, setHealth] = useState<string>("Checking...");
   const [healthDetail, setHealthDetail] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -20,18 +22,27 @@ export default function SystemMonitor() {
     try {
       const [txsData, driftData, healthData] = await Promise.all([
         api<Transaction[]>("/api/transactions"),
-        api<{ drift_status?: string }>("/api/model-drift"),
+        api<{ drift_status?: string; detail?: string; conclusive?: boolean }>(
+          "/api/model-drift"
+        ),
         api<{ status?: string; model?: string; model_detail?: string | null }>("/api/health"),
       ]);
 
       setTxs(Array.isArray(txsData) ? txsData : []);
-      setDrift(driftData.drift_status || "Model Stable");
+      // Not `|| "Model Stable"`. A backend that answered "not enough data" has
+      // no drift_status, and defaulting an absent answer to the reassuring one
+      // printed a green "Model Stable" for a check that never ran.
+      setDrift(driftData.drift_status || "Unknown");
+      setDriftDetail(driftData.detail ?? null);
+      setDriftConclusive(driftData.conclusive ?? false);
       setHealth(healthData.status === "ok" ? "HEALTHY" : "DEGRADED");
       setHealthDetail(healthData.model_detail ?? null);
     } catch (err: any) {
       setError(err.message || "Failed to parse system metrics");
       setHealth("DEGRADED");
       setDrift("Unknown");
+      setDriftDetail(null);
+      setDriftConclusive(false);
     } finally {
       setLoading(false);
     }
@@ -88,14 +99,23 @@ export default function SystemMonitor() {
           </div>
         </div>
 
-        <div className="bg-surface border border-line rounded-xl p-5 flex items-center justify-between">
+        <div className="bg-surface border border-line rounded-xl p-5 flex items-start justify-between gap-3">
           <div>
             <span className="text-xs font-semibold text-ink-subtle uppercase tracking-wider block">ML Model Drift</span>
-            <span className={`text-2xl font-extrabold block mt-1.5 ${
-              drift === "Model Stable" ? "text-ok" : "text-warn"
+            <span className={`text-xl font-extrabold block mt-1.5 ${
+              driftConclusive && drift === "Model Stable" ? "text-ok" : "text-warn"
             }`}>{drift}</span>
+            {driftDetail && (
+              <span className="text-[11px] text-ink-subtle block mt-1 leading-snug">
+                {driftDetail}
+              </span>
+            )}
           </div>
-          <div className={`p-3 rounded-lg ${drift === "Model Stable" ? "bg-emerald-500/10 text-ok" : "bg-amber-500/10 text-warn"}`}>
+          <div className={`p-3 rounded-lg shrink-0 ${
+            driftConclusive && drift === "Model Stable"
+              ? "bg-emerald-500/10 text-ok"
+              : "bg-amber-500/10 text-warn"
+          }`}>
             <ShieldAlert className="h-6 w-6" />
           </div>
         </div>

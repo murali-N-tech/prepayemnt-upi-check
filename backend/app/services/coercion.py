@@ -41,7 +41,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-WEIGHTS_PATH = Path("models") / "coercion_weights.json"
+# Anchored to the project root, not the process working directory: started
+# from anywhere else the weights silently failed to load and a different
+# scoring function shipped, with no error anywhere.
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+WEIGHTS_PATH = _PROJECT_ROOT / "models" / "coercion_weights.json"
 
 # Coverage note: English plus the romanised Hindi/Hinglish that appears in
 # Indian scam traffic. Devanagari script and other Indian languages are NOT
@@ -88,14 +92,26 @@ WEAK_PATTERNS = (
         "penalty", "legal action", "arrest", "fir", "case will be filed",
         "account closed", "band ho jayega", "band kar diya",
     )),
-)
-
-STRONG_PATTERNS = (
+    # Measured precision on the corpus: 68.9%. Every genuine bill reminder
+    # says "pay". It was classed STRONG, which let it satisfy the gate below
+    # and so defeated the one safeguard this module is built around: an
+    # ordinary overdue-bill notice scored 98 and reached BLOCK.
     Pattern("pay_request", "Asks you to send money", (
         "pay", "send money", "transfer", "make payment", "pay now",
         "send rs", "send the amount", "paise bhejo", "payment karo",
         "scan the qr", "scan this qr", "use this upi",
     )),
+    # Measured precision: 27.4% - lower than authority. Banks say "never
+    # share your OTP" constantly, and this fires on the warning as readily as
+    # on the demand. Severity drops with it; claiming "critical" for a cue
+    # that is wrong three times in four is not defensible.
+    Pattern("credential_request", "Mentions a secret (OTP, PIN, CVV)", (
+        "otp", "one time password", "cvv", "pin number", "upi pin",
+        "share your pin", "atm pin", "card number", "password",
+    )),
+)
+
+STRONG_PATTERNS = (
     Pattern("secrecy", "Asks you to keep it quiet", (
         "do not tell", "don't tell", "do not inform", "do not share this",
         "keep this confidential", "between us", "do not discuss",
@@ -120,10 +136,6 @@ STRONG_PATTERNS = (
         "call this number", "call immediately on", "whatsapp on",
         "contact us on", "call back on", "helpline number", "call me on",
     )),
-    Pattern("credential_request", "Asks for a secret", (
-        "otp", "one time password", "cvv", "pin number", "upi pin",
-        "share your pin", "atm pin", "card number", "password",
-    )),
 )
 
 ALL_PATTERNS: tuple[Pattern, ...] = WEAK_PATTERNS + STRONG_PATTERNS
@@ -135,12 +147,12 @@ SEVERITY: dict[str, str] = {
     "urgency": "info",
     "fear": "warn",
     "lure": "warn",
-    "pay_request": "warn",
+    "pay_request": "info",
     "contact_offline": "warn",
     "secrecy": "high",
     "verify_payment": "high",
     "remote_control": "critical",
-    "credential_request": "critical",
+    "credential_request": "warn",
 }
 
 MAX_MESSAGE_CHARS = 4000
@@ -160,7 +172,10 @@ MAX_MESSAGE_CHARS = 4000
 # bank never does - asking you to pay a person, to keep it quiet, to install
 # something, to send a token amount, to move to a phone number - has to be
 # present before this stream says anything loud.
-WEAK_ONLY_CEILING = 35
+# Below payee_check's agreement threshold (20) on purpose: a message this
+# module has decided is NOT evidence must not then be counted as one of the
+# independent streams that agree.
+WEAK_ONLY_CEILING = 15
 
 
 def apply_policy(probability: float, features: dict[str, int]) -> tuple[int, bool]:
@@ -233,11 +248,14 @@ def _quotes(text: str) -> dict[str, str]:
 _weights: Optional[dict[str, Any]] = None
 
 
-def load_weights(path: Path = WEIGHTS_PATH) -> Optional[dict[str, Any]]:
+def load_weights(path: Optional[Path] = None) -> Optional[dict[str, Any]]:
     """Coefficients from models/coercion_weights.json, or None if unfitted."""
     global _weights
     if _weights is not None:
         return _weights
+    # Read the module attribute at CALL time. As a default argument it was
+    # evaluated at import, so pointing WEIGHTS_PATH at a fixture had no effect.
+    path = path or WEIGHTS_PATH
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):

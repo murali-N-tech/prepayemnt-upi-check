@@ -6,7 +6,7 @@ sys.path.append(BASE_DIR)
 
 from fastapi import FastAPI, HTTPException
 from fastapi import File, Form, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import uuid
 import numpy as np
 import pandas as pd
@@ -37,6 +37,7 @@ from backend.app.services.personalized_risk_service import (
     evaluate_personalized_risk,
 )
 from backend.app.services.fraud_graph import detect_rings, graph_summary, load_edges
+from backend.app.services.chat import answer as chat_answer, is_configured as chat_configured
 from backend.app.services.intent import INTENTS
 from backend.app.services.payee_check import check_payee
 from backend.app.services.upi_verify import (
@@ -44,7 +45,7 @@ from backend.app.services.upi_verify import (
     verification_required as upi_verification_required,
     verify_vpa,
 )
-from backend.app.services.payee_reputation import record_payment, report_payee
+from backend.app.services.payee_reputation import payer_has_paid, record_payment, report_payee
 
 from backend.app.services.behavioral_biometrics import (
     behavior_score,
@@ -52,9 +53,10 @@ from backend.app.services.behavioral_biometrics import (
     normalised_velocity,
 )
 from backend.app.services.temporal_gnn import temporal_patterns
-from backend.app.services.drift_monitor import detect_drift
+from backend.app.services.drift_monitor import detect_drift, drift_report
 
 from backend.app.core.security import hash_password, verify_password, create_token, verify_token
+from backend.app.core.upi_limits import check_amount, describe_cap, standard_cap
 from backend.app.services.profile_store import create_user, get_user_by_username
 
 
@@ -153,6 +155,23 @@ class Transaction(BaseModel):
     receiver: str
     timestamp: str
 
+    @field_validator("amount")
+    @classmethod
+    def _amount_is_a_possible_upi_payment(cls, value: float) -> float:
+        """A bare `amount: float` accepted anything. Measured before this:
+        -5000 scored risk=0 and came back "APPROVED", and 1e12 - one lakh
+        crore - was scored as a real payment. Neither can move over UPI, so a
+        fraud verdict on either is a verdict about a payment that cannot
+        happen. 422 is the honest answer.
+
+        The standard cap applies here: /predict takes a bare amount with no QR,
+        so nothing has established the payee is a verified merchant.
+        """
+        problem = check_amount(value)
+        if problem:
+            raise ValueError(problem)
+        return float(value)
+
 
 class PersonalizedRiskCheck(BaseModel):
 
@@ -161,6 +180,14 @@ class PersonalizedRiskCheck(BaseModel):
     timestamp: str
     upi_id: str | None = None
     location: str | None = None
+
+    @field_validator("amount")
+    @classmethod
+    def _amount_is_a_possible_upi_payment(cls, value: float) -> float:
+        problem = check_amount(value)
+        if problem:
+            raise ValueError(problem)
+        return float(value)
 
 class UserAuth(BaseModel):
     username: str
@@ -171,6 +198,26 @@ class PayeeCheckRequest(BaseModel):
     """`payload` is a scanned QR, a pasted UPI ID, or a phone number."""
     payload: str
     amount: float | None = None
+
+    @field_validator("amount")
+    @classmethod
+    def _amount_is_not_absurd(cls, value: float | None) -> float | None:
+        """Sign and finiteness only. WHICH cap applies depends on the QR - a
+        signed merchant QR may carry up to Rs 5 lakh - so the cap itself is
+        checked inside check_payee(), where the merchant code is known, and it
+        becomes a FINDING there rather than a 422: a QR demanding more than UPI
+        allows is evidence about that QR, not a bad request from the user."""
+        if value is None:
+            return None
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            raise ValueError("That amount is not a number.")
+        if v != v or v in (float("inf"), float("-inf")):
+            raise ValueError("That amount is not a number.")
+        if v < 0:
+            raise ValueError("An amount cannot be negative.")
+        return v
     # What the payer says they are doing. One of intent.INTENTS.
     intent: str | None = None
     # The message that prompted this payment, if the payer chose to share it.
@@ -182,7 +229,66 @@ class PayeeReportRequest(BaseModel):
     vpa: str
     reason: str | None = None
 
+
+class ChatTurn(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    """A question for the assistant.
+
+    `check_result` is whatever /payee/check last returned on this screen, sent
+    back so the assistant can explain THAT verdict. It is echoed evidence, not
+    authority: nothing in it can change a decision, because the assistant has no
+    way to make one. Everything about the person's own history is looked up
+    here from their token, never accepted from the client.
+    """
+    message: str
+    history: list[ChatTurn] = []
+    check_result: dict | None = None
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+
+
+def _payer_context(sender: str, current_time: str) -> dict[str, float]:
+    """The payer-history part of the feature vector, computed once.
+
+    /explain used to omit seconds_since_last_txn, txns_last_hour and
+    txns_today entirely and fall back to the defaults, so it explained a
+    vector the model was never given - on roughly one transaction in twenty
+    that vector produces the opposite decision. One function now serves both
+    endpoints so they cannot disagree.
+    """
+    NO_PRIOR_GAP = 86_400.0
+    df = get_all_transactions(sender=sender, limit=200)
+    now = pd.to_datetime(current_time, errors="coerce", utc=True)
+
+    context = {
+        "seconds_since_last_txn": NO_PRIOR_GAP,
+        "txns_last_hour": 0.0,
+        "txns_today": 1.0,
+    }
+    if df is None or df.empty or pd.isna(now):
+        return context
+
+    stamps = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+    stamps = stamps.dropna()
+    if stamps.empty:
+        return context
+
+    delta = (now - stamps.max()).total_seconds()
+    # Clamp: clock skew or an out-of-order timestamp must not become a
+    # negative gap, which reads as the strongest velocity signal there is.
+    context["seconds_since_last_txn"] = float(min(max(delta, 1.0), NO_PRIOR_GAP))
+
+    # A real count of this payer's payments in the past hour. The model was
+    # trained on a COUNT; serving used to pass tx.velocity_score, which this
+    # same file synthesises as risk_score/10 - a score, not a count.
+    context["txns_last_hour"] = float(((now - stamps).dt.total_seconds() <= 3600).sum())
+    context["txns_today"] = float((stamps.dt.date == now.date()).sum()) + 1.0
+    return context
+
 
 def get_current_user(token: str = Depends(oauth2_scheme)):
     user_id = verify_token(token)
@@ -218,7 +324,11 @@ def register(user: UserAuth):
                    f"(UPI_VERIFY_REQUIRED is set), so please try again shortly.",
         )
 
-    user_id = f"usr_{uuid.uuid4().hex[:8]}"
+    # Full uuid, as with tx ids. hex[:8] is 32 bits: a collision has a 1%
+    # chance by about 9,300 accounts, and because user_id is the primary key
+    # the insert would fail and report "That UPI ID is already registered" to
+    # somebody whose address was not registered at all.
+    user_id = f"usr_{uuid.uuid4().hex}"
     hashed = hash_password(user.password)
     success = create_user(user_id, upi_id, hashed, upi_id=upi_id, upi_verified=check.ok)
     if not success:
@@ -304,7 +414,13 @@ def health():
 # --------------------------------------------------
 
 @app.post("/predict")
-def predict(tx: Transaction):
+def predict(tx: Transaction, user: str = Depends(get_current_user)):
+    # The payer is whoever holds the token. Express already overwrites
+    # tx.sender, but the Python service is reachable directly, and a
+    # client-supplied sender let anyone write scored rows under another
+    # user's id - which is what /heatmap, /transactions and the behaviour
+    # profile all read back.
+    tx = tx.model_copy(update={"sender": user})
 
     try:
         current_time = pd.to_datetime(tx.timestamp)
@@ -319,63 +435,51 @@ def predict(tx: Transaction):
     # table meant "seconds since last transaction" was measured against a
     # stranger's payment, which produced 0 - or a negative number - and fed
     # the model a value it never saw in training.
-    df = get_all_transactions(sender=tx.sender, limit=50)
-
-    # No prior payment is not the same as "one second ago". Default to a long
-    # gap so an absent history does not read as a rapid-fire burst.
-    NO_PRIOR_GAP = 86_400.0
-
-    if df.empty:
-        rolling_avg_amount = tx.amount
-        rolling_txn_count = 1
-        time_gap = NO_PRIOR_GAP
-    else:
-        recent = df.tail(5)
-        rolling_avg_amount = float(recent["amount"].mean())
-        rolling_txn_count = int(len(recent))
-
-        time_gap = NO_PRIOR_GAP
-        last_time = pd.to_datetime(df.iloc[-1]["timestamp"], errors="coerce", utc=True)
-        now = pd.to_datetime(current_time, errors="coerce", utc=True)
-        if pd.notna(last_time) and pd.notna(now):
-            delta = (now - last_time).total_seconds()
-            # Clamp: a clock skew or an out-of-order timestamp must not become
-            # a negative gap, which reads as the strongest velocity signal there is.
-            time_gap = float(min(max(delta, 1.0), NO_PRIOR_GAP))
-
-    # Payments already made today by this payer, for the velocity feature.
-    txns_today = 1
-    if not df.empty:
-        day = pd.to_datetime(df["timestamp"], errors="coerce", utc=True).dt.date
-        today = pd.to_datetime(current_time, errors="coerce", utc=True)
-        if pd.notna(today):
-            txns_today = int((day == today.date()).sum()) + 1
-
     # The model is trained on these exact features (backend/ml/features.py is
     # the single mapping, so training and serving cannot drift apart).
     payer_profile = get_behavior_profile(tx.sender)
     payee = assess_payee(payee_key(tx.receiver, tx.receiver))
 
+    context = _payer_context(tx.sender, current_time)
     features = build_features(
         amount=tx.amount,
         timestamp=tx.timestamp,
         profile=payer_profile,
         reputation=payee.as_dict(),
-        seconds_since_last_txn=time_gap,
-        txns_last_hour=tx.velocity_score,
-        txns_today=txns_today,
+        seconds_since_last_txn=context["seconds_since_last_txn"],
+        txns_last_hour=context["txns_last_hour"],
+        txns_today=context["txns_today"],
+        payer_seen_payee_before=payer_has_paid(payee.vpa, tx.sender),
     )
 
     prob = float(model_or_503().predict_proba(to_frame(features))[0][1])
     risk_score = int(round(prob * 100))
     model_flag = prob >= DECISION_THRESHOLD
 
-    # The model decides. The two hard rules stay as a floor because a very
-    # large amount or an obvious velocity spike should never be waved through
-    # on a model's say-so.
-    risk = 1 if (model_flag or tx.amount > 70000 or tx.velocity_score > 7) else 0
+    # The model decides. The two hard rules stay as a floor because a payment
+    # near the top of what UPI permits, or an obvious velocity spike, should
+    # never be waved through on a model's say-so.
+    #
+    # 70000 used to be written here as a bare number and it was doing more work
+    # than it looked like. The simulator's amounts top out around Rs 61,000 -
+    # 3 rows in 120,000 above Rs 50,000 and NONE above Rs 70,000 - so the model
+    # has never seen the top 30% of the legal UPI range and its prediction is
+    # flat at 0.4034 from Rs 5,000 to Rs 1,00,000. This rule was the only thing
+    # separating a Rs 1 lakh drain from a Rs 5,000 payment. The simulator now
+    # covers the full legal range (see ml/dataset.py), so the model can see the
+    # gradient itself - but the floor stays, expressed against the cap rather
+    # than as a magic number, because the cost of missing a maxed-out transfer
+    # is the whole daily limit.
+    near_the_upi_ceiling = tx.amount >= 0.7 * standard_cap()
+    risk = 1 if (model_flag or near_the_upi_ceiling or tx.velocity_score > 7) else 0
 
-    tx_id = f"tx_{uuid.uuid4().hex[:6]}"
+    # The full uuid, not hex[:6]. Six hex characters is 24 bits: by the birthday
+    # bound there is a 1% chance of a collision by about 580 payments and a 50%
+    # chance by about 4,800 - and transaction_id is the PRIMARY KEY of
+    # scored_transactions written with INSERT OR REPLACE, so a collision did not
+    # error, it silently overwrote somebody's payment record. It also made the
+    # ids short enough to enumerate.
+    tx_id = f"tx_{uuid.uuid4().hex}"
 
     transaction_data = {
         "transaction_id": tx_id,
@@ -412,7 +516,15 @@ def predict(tx: Transaction):
         "risk_score": risk_score,
         "probability": round(prob, 5),
         "threshold": round(DECISION_THRESHOLD, 5),
-        "decided_by": "model" if model_flag else ("rule" if risk else "none"),
+        "decided_by": (
+            "model" if model_flag
+            else "rule:near_upi_ceiling" if near_the_upi_ceiling
+            else "rule:velocity" if risk
+            else "none"
+        ),
+        # Which ceiling the rule was measured against, so the number above is
+        # not another unexplained constant in the response.
+        "upi_per_transaction_cap": standard_cap(),
         "model": MODEL_METRICS.get("selected", {}).get("model"),
         "fpr_budget": FPR_BUDGET,
         "features": features,
@@ -425,16 +537,25 @@ def predict(tx: Transaction):
 # --------------------------------------------------
 
 @app.get("/heatmap")
-def heatmap():
+def heatmap(user: str = Depends(get_current_user)):
+    """The caller's own scored payments.
 
-    df = get_all_transactions()
+    Two bugs here. It was unauthenticated and unscoped, so it returned every
+    user's payment amounts to anyone who asked - and the Python service is
+    reachable directly, not only through Express. And it returned the binary
+    `risk` flag but no score, so the frontend invented one with
+    Math.random(): the y-axis of the "Fraud Activity Heatmap" was noise, and
+    every reload moved the points. risk_score is stored on the row; return it.
+    """
+    df = get_all_transactions(sender=user)
 
     if len(df) < 2:
         return {"error": "Not enough transactions"}
 
     return {
         "amount": df["amount"].tolist(),
-        "risk": df["risk"].tolist()
+        "risk": df["risk"].tolist(),
+        "risk_score": df["risk_score"].tolist(),
     }
 
 
@@ -443,22 +564,31 @@ def heatmap():
 # --------------------------------------------------
 
 @app.get("/explain/{tx_id}")
-def explain(tx_id: str):
+def explain(tx_id: str, user: str = Depends(get_current_user)):
 
     tx = get_transaction(tx_id)
 
-    if tx is None:
+    # Ownership, not just existence. Transaction ids are guessable and this
+    # endpoint returns the amount, the payee and the full feature vector, so
+    # without the check any logged-in user could read any other user's
+    # payments one id at a time. 404 rather than 403: a 403 would confirm the
+    # id exists.
+    if tx is None or (tx.get("sender") or "") != user:
         raise HTTPException(status_code=404, detail="Transaction Not Found")
 
     payer_profile = get_behavior_profile(tx.get("sender", ""))
     payee = assess_payee(payee_key(tx.get("receiver", ""), tx.get("receiver", "")))
 
+    context = _payer_context(tx.get("sender") or "", tx.get("timestamp") or "")
     features = build_features(
         amount=tx["amount"],
         timestamp=tx.get("timestamp"),
         profile=payer_profile,
         reputation=payee.as_dict(),
-        txns_last_hour=tx.get("velocity_score", 0),
+        seconds_since_last_txn=context["seconds_since_last_txn"],
+        txns_last_hour=context["txns_last_hour"],
+        txns_today=context["txns_today"],
+        payer_seen_payee_before=payer_has_paid(payee.vpa, tx.get("sender") or ""),
     )
 
     try:
@@ -523,9 +653,9 @@ def fraud_rings(user: str = Depends(get_current_user)):
 # --------------------------------------------------
 
 @app.get("/temporal-patterns")
-def temporal_api():
-
-    df = get_all_transactions()
+def temporal_api(user: str = Depends(get_current_user)):
+    # Was unauthenticated and returned every user's hourly payment pattern.
+    df = get_all_transactions(sender=user)
 
     if df.empty:
         return {"error": "No transactions"}
@@ -538,11 +668,11 @@ def temporal_api():
 # --------------------------------------------------
 
 @app.get("/behavior/{tx_id}")
-def behavior(tx_id: str):
+def behavior(tx_id: str, user: str = Depends(get_current_user)):
 
     tx = get_transaction(tx_id)
 
-    if tx is None:
+    if tx is None or (tx.get("sender") or "") != user:
         raise HTTPException(status_code=404, detail="Transaction Not Found")
 
     label = behavior_score(tx["velocity_score"], tx["device_score"])
@@ -567,18 +697,35 @@ def behavior(tx_id: str):
 
 @app.get("/model-drift")
 def model_drift(user: str = Depends(get_current_user)):
+    """Drift is a property of the deployed model, so this is deliberately
+    global rather than per-user.
 
-    df = get_all_transactions()
+    Three things were wrong. It read the binary `risk` flag, so a drift that
+    moved scores from 45 to 65 without crossing the threshold was invisible.
+    It used ten rows a side, where the sampling noise of a proportion is
+    larger than the 0.3 threshold it was tested against. And when there was
+    too little data it returned {"status": ...} with no `drift_status` key, so
+    the UI's `drift_status || "Model Stable"` printed a green "Model Stable" -
+    the reassuring answer - for a check that had not run.
+    """
+    df = get_all_transactions(limit=2000)
 
-    if len(df) < 20:
-        return {"status": "Not enough data"}
+    scores = pd.to_numeric(df.get("risk_score"), errors="coerce").dropna().tolist()
+    half = len(scores) // 2
+    report = drift_report(scores[:half], scores[half:])
 
-    old_scores = df["risk"][:10]
-    new_scores = df["risk"][-10:]
-
-    drift = detect_drift(old_scores, new_scores)
-
-    return {"drift_status": drift}
+    # drift_status is always present now, including for the inconclusive case.
+    return {
+        "drift_status": report["status"],
+        "detail": report.get("detail"),
+        "conclusive": report.get("conclusive", False),
+        "mean_before": report.get("mean_before"),
+        "mean_after": report.get("mean_after"),
+        "shift": report.get("shift"),
+        "sigmas": report.get("sigmas"),
+        "n_before": report.get("n_before"),
+        "n_after": report.get("n_after"),
+    }
 
 
 # --------------------------------------------------
@@ -775,7 +922,10 @@ def get_transactions(user: str = Depends(get_current_user)):
             amount=amount,
             merchant=merchant,
             timestamp=ts,
-            upi_id=upi_id
+            upi_id=upi_id,
+            # This row is already in `df`; without saying so the same-day
+            # count included it twice and reported one payment too many.
+            already_recorded=True,
         )
         
         score = risk_result.get("risk_score", 10)
@@ -783,7 +933,12 @@ def get_transactions(user: str = Depends(get_current_user)):
         txs.append({
             "transaction_id": str(row.get("id", "")),
             "amount": amount,
-            "device_score": round(score / 100 * 0.8, 2), # derive some mock metrics based on actual score
+            # Derived from `score`, not measured. Named so, because the UI
+            # was labelling them "Scores (Dev/Loc/Vel)" as if they were three
+            # independent signals; they are perfectly collinear with the score
+            # already shown.
+            "derived_from_score": True,
+            "device_score": round(score / 100 * 0.8, 2),
             "location_score": round(score / 100 * 0.6, 2),
             "velocity_score": round(score / 10, 2),
             "sender": user,
@@ -882,6 +1037,35 @@ def payee_check(payload: PayeeCheckRequest, user: str = Depends(get_current_user
     return result
 
 
+@app.get("/chat/status")
+def chat_status():
+    """Whether the assistant has a model behind it.
+
+    The UI needs to say "not configured" rather than offering a chat box that
+    answers everything with an error.
+    """
+    return {"available": chat_configured()}
+
+
+@app.post("/chat")
+def chat(payload: ChatRequest, user: str = Depends(get_current_user)):
+    """Explain, never decide.
+
+    The assistant has no tools and cannot act. The facts it sees are assembled
+    server-side from this token's own profile, so a client cannot widen its own
+    access by asking; see backend/app/services/chat.py for the reasoning.
+    """
+    reply = chat_answer(
+        question=payload.message,
+        user=user,
+        history=[t.model_dump() for t in payload.history],
+        # Looked up here from the token. Never taken from the request body.
+        profile=get_behavior_profile(user),
+        check_result=payload.check_result,
+    )
+    return reply.as_dict()
+
+
 @app.post("/payee/report")
 def payee_report(payload: PayeeReportRequest, user: str = Depends(get_current_user)):
     """Report a payee. Reports are what turn one person's bad experience into
@@ -912,5 +1096,21 @@ def payee_confirm(payload: PayeeCheckRequest, user: str = Depends(get_current_us
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+
+    # The import STRING, not the app object, and reload=True.
+    #
+    # `uvicorn.run(app, ...)` cannot reload - uvicorn needs a module path to
+    # re-import, and silently runs without reloading when handed an object. So
+    # `npm run dev` started a server that served whatever the code was at boot
+    # and never noticed another change: a new route answered 404 while /health
+    # kept returning 200, which looks like a routing bug and is not one.
+    uvicorn.run(
+        "backend.main:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True,
+        # data/ churns constantly (SQLite journal files) and models/ is written
+        # by the trainer; watching either restarts the server mid-request.
+        reload_dirs=["backend"],
+    )
 

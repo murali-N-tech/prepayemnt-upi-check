@@ -7,10 +7,32 @@ export function isCapacitorNative(): boolean {
   return typeof (window as any).Capacitor !== "undefined" && (window as any).Capacitor.isNativePlatform();
 }
 
+// localStorage throws, not returns null, when site data is blocked - a private
+// window, a locked-down enterprise profile, Safari with cross-site storage off.
+// Every read here used to be bare, so in those browsers the first call threw
+// during module evaluation and the whole app rendered a blank page instead of
+// falling back to the relative path that works fine.
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // A backend URL the user cannot persist is still usable for this session;
+    // losing it on reload beats breaking the page.
+  }
+}
+
 export function getStoredBackendUrl(): string {
-  const saved = localStorage.getItem(STORAGE_KEY);
+  const saved = readStored(STORAGE_KEY);
   if (saved) return saved.trim();
-  
+
   if (isCapacitorNative()) {
     return "https://edge-upi-backend.onrender.com";
   }
@@ -20,16 +42,15 @@ export function getStoredBackendUrl(): string {
 
 export function setStoredBackendUrl(url: string): void {
   const trimmed = url.trim().replace(/\/$/, "");
-  localStorage.setItem(STORAGE_KEY, trimmed);
+  writeStored(STORAGE_KEY, trimmed);
 }
 
 export function getBackendMode(): "online" | "offline" {
-  const mode = localStorage.getItem(MODE_KEY);
-  return mode === "offline" ? "offline" : "online";
+  return readStored(MODE_KEY) === "offline" ? "offline" : "online";
 }
 
 export function setBackendMode(mode: "online" | "offline"): void {
-  localStorage.setItem(MODE_KEY, mode);
+  writeStored(MODE_KEY, mode);
 }
 
 export function getApiUrl(endpointPath: string): string {
@@ -55,7 +76,8 @@ export function getApiUrl(endpointPath: string): string {
 
 export async function testBackendHealth(customUrl?: string): Promise<{ success: boolean; message: string }> {
   const targetBase = customUrl !== undefined ? customUrl.trim().replace(/\/$/, "") : getStoredBackendUrl();
-  const testPath = targetBase ? (targetBase.endsWith("/api") ? `${targetBase}/health` : `${targetBase}/health`) : "/api/health";
+  // Both branches of the old ternary were identical; the same URL either way.
+  const testPath = targetBase ? `${targetBase}/health` : "/api/health";
 
   try {
     const controller = new AbortController();

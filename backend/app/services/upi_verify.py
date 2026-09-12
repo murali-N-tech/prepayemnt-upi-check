@@ -86,13 +86,21 @@ def _parse_response(payload: dict[str, Any]) -> tuple[bool, Optional[str]]:
         status = str(payload.get("status", "")).lower()
         valid = status in {"valid", "success", "verified"} if status else None
 
+    # A conditional expression binds looser than `or`, so the trailing
+    # `if ... else None` guarded the WHOLE or-chain, not just the last term: a
+    # provider that answers {"valid": true, "customer_name": "..."} - no "name"
+    # key and no "data" object - failed the condition and the account holder's
+    # name was discarded, leaving "Confirmed by <provider>" with no name to show
+    # the user against the one on the QR. The guard was never needed, because
+    # `(payload.get("data") or {})` already copes with a missing "data".
+    data = payload.get("data")
+    nested = data.get("name") if isinstance(data, dict) else None
     name = (
         payload.get("name")
         or payload.get("customer_name")
         or payload.get("account_holder")
-        or (payload.get("data") or {}).get("name")
-        if isinstance(payload.get("data"), dict) or "name" in payload
-        else None
+        or nested
+        or None
     )
     return bool(valid), name
 

@@ -20,7 +20,12 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from backend.app.services.profile_store import _get_connection
-from backend.app.services.vpa import SEVERITY_WEIGHT, VpaFinding, normalise_vpa
+from backend.app.services.vpa import (
+    VpaFinding,
+    graded,
+    normalise_vpa,
+    total_weight,
+)
 
 
 def _utcnow() -> str:
@@ -114,7 +119,7 @@ class PayeeReputation:
 
     @property
     def score(self) -> int:
-        return min(100, sum(SEVERITY_WEIGHT[f.severity] for f in self.findings))
+        return total_weight(self.findings)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -258,6 +263,35 @@ def _days_since(iso: Optional[str]) -> Optional[int]:
     return max(0, (datetime.now(timezone.utc) - ts).days)
 
 
+def payer_has_paid(vpa: str, payer_id: Optional[str],
+                   conn: Optional[sqlite3.Connection] = None) -> Optional[bool]:
+    """Has THIS payer paid THIS payee before?
+
+    This is the question the model's `payee_is_new` feature was trained on, and
+    until now nothing answered it: serving substituted "does this payee have
+    any repeat payers at all", which is a property of the payee's whole
+    network and is true for almost every payee. The two are different
+    questions, and the substitution cost most of the model's recall.
+
+    Returns None when there is no payer to ask about, so the caller can tell
+    "not known before" apart from "we cannot say".
+    """
+    if not payer_id:
+        return None
+    key = normalise_vpa(vpa)
+    own = conn is None
+    conn = conn or connect()
+    try:
+        row = conn.execute(
+            "SELECT payments FROM payee_payers WHERE vpa = ? AND payer_id = ?",
+            (key, str(payer_id)),
+        ).fetchone()
+    finally:
+        if own:
+            conn.close()
+    return bool(row and (row["payments"] or 0) > 0)
+
+
 def assess_payee(vpa: str, conn: Optional[sqlite3.Connection] = None) -> PayeeReputation:
     """Look the payee up and score the shape of their incoming payments."""
     key = normalise_vpa(vpa)
@@ -280,10 +314,22 @@ def assess_payee(vpa: str, conn: Optional[sqlite3.Connection] = None) -> PayeeRe
     rep.repeat_payers = payers["repeat_n"] or 0
 
     if row is None and rep.distinct_payers == 0:
+        # The single most common finding in the whole system: on a fresh
+        # deployment EVERY payee is unseen, so this fired on every check at a
+        # flat 12 and became a constant added to every score. Combined with any
+        # one high-severity finding it produced 35 + 0.4*12 = 39.8 -> 40, which
+        # is why almost every test came out at 40.
+        #
+        # It is also the weakest evidence here. "We have never seen this
+        # address" says almost nothing on a network with little history - it is
+        # the null result, not a red flag - so it is weighted at the bottom of
+        # the warn band and left to be corroborated by something that actually
+        # measures the payee.
         rep.findings.append(
             VpaFinding("payee_unseen", "warn",
                        "No payment history for this address. That is normal for a new "
-                       "payee, and it is also what a freshly created account looks like.")
+                       "payee, and it is also what a freshly created account looks like.",
+                       weight=6)
         )
         return rep
 
@@ -315,14 +361,17 @@ def assess_payee(vpa: str, conn: Optional[sqlite3.Connection] = None) -> PayeeRe
         )
 
     if rep.reports >= 3:
+        # Three complaints and thirty are not the same thing.
         rep.findings.append(
             VpaFinding("payee_reported", "critical",
-                       f"{rep.reports} different people have reported this address.")
+                       f"{rep.reports} different people have reported this address.",
+                       weight=graded(3, 15, rep.reports, 72, 100))
         )
     elif rep.reports > 0:
         rep.findings.append(
             VpaFinding("payee_reported", "high",
-                       f"{rep.reports} person(s) have reported this address.")
+                       f"{rep.reports} person(s) have reported this address.",
+                       weight=graded(1, 2, rep.reports, 30, 46))
         )
 
     young = rep.age_days is not None and rep.age_days <= 30
@@ -337,19 +386,28 @@ def assess_payee(vpa: str, conn: Optional[sqlite3.Connection] = None) -> PayeeRe
             VpaFinding("mule_pattern", "critical",
                        f"Opened {rep.age_days} days ago and already taking payments from "
                        f"{rep.distinct_payers} different people, almost none of whom paid "
-                       f"twice. That is how a collection account behaves.")
+                       f"twice. That is how a collection account behaves.",
+                       # Two measurements, averaged: how new the address is and
+                       # how many strangers have already paid it. An account
+                       # three days old with sixty one-shot payers is a far
+                       # stronger case than one 29 days old with ten.
+                       weight=(graded(30, 2, float(rep.age_days or 30), 60, 100)
+                               + graded(10, 60, rep.distinct_payers, 60, 100)) / 2)
         )
     elif young and rep.distinct_payers >= 5:
         rep.findings.append(
             VpaFinding("new_and_busy", "high",
                        f"Only {rep.age_days} days old but already paid by "
-                       f"{rep.distinct_payers} different people.")
+                       f"{rep.distinct_payers} different people.",
+                       weight=(graded(30, 2, float(rep.age_days or 30), 24, 52)
+                               + graded(5, 40, rep.distinct_payers, 24, 52)) / 2)
         )
     elif one_shot and rep.distinct_payers >= 15:
         rep.findings.append(
             VpaFinding("no_repeat_payers", "warn",
                        f"{rep.distinct_payers} people have paid this address and almost "
-                       f"none came back. Real businesses keep customers.")
+                       f"none came back. Real businesses keep customers.",
+                       weight=graded(15, 80, rep.distinct_payers, 10, 22))
         )
 
     # Amounts clustered in a narrow band across many payers is what a fixed
@@ -363,7 +421,11 @@ def assess_payee(vpa: str, conn: Optional[sqlite3.Connection] = None) -> PayeeRe
         rep.findings.append(
             VpaFinding("uniform_amounts", "high",
                        f"Nearly every payment here is about the same amount "
-                       f"(Rs {rep.mean_amount:,.0f}), across {rep.distinct_payers} payers.")
+                       f"(Rs {rep.mean_amount:,.0f}), across {rep.distinct_payers} payers.",
+                       # A spread of 0.02 across 50 payers is a fixed "fee";
+                       # 0.14 across 8 is a shop with a popular item.
+                       weight=(graded(0.15, 0.0, rep.amount_spread, 24, 52)
+                               + graded(8, 50, rep.distinct_payers, 24, 52)) / 2)
         )
 
     # Reassurance, worth as much as a warning.

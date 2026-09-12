@@ -6,6 +6,7 @@ import { useAuth } from "../context/AuthContext";
 export default function FraudAlerts() {
   const { api } = useAuth();
   const [alerts, setAlerts] = useState<Transaction[]>([]);
+  const [scanned, setScanned] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -14,8 +15,9 @@ export default function FraudAlerts() {
     setError(null);
     try {
       const data = await api<Transaction[]>("/api/transactions");
-      const filtered = (Array.isArray(data) ? data : []).filter(t => t.risk === 1);
-      setAlerts(filtered);
+      const rows = Array.isArray(data) ? data : [];
+      setScanned(rows.length);
+      setAlerts(rows.filter(t => t.risk === 1));
     } catch (err: any) {
       setError(err.message || "Something went wrong");
     } finally {
@@ -45,12 +47,22 @@ export default function FraudAlerts() {
           {error}
         </div>
       ) : alerts.length === 0 ? (
-        <div className="bg-emerald-500/10 border border-emerald-500/20 text-ok rounded-xl p-6 flex items-start gap-4 max-w-2xl">
+        // "The live payment processing channels are fully secure" was a claim
+        // this screen cannot make. The model's recall is well under 100%, so
+        // "nothing flagged" and "nothing happened" look identical here - and
+        // with no transactions at all it said the same thing. Report what was
+        // actually checked.
+        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-6 flex items-start gap-4 max-w-2xl">
           <CheckCircle className="h-8 w-8 text-ok mt-0.5 shrink-0" />
           <div>
-            <h3 className="text-lg font-semibold text-ink">Security Stream Clear</h3>
+            <h3 className="text-lg font-semibold text-ink">
+              {scanned === 0 ? "Nothing checked yet" : "No alerts in your recent payments"}
+            </h3>
             <p className="text-ink-muted text-sm mt-1">
-              No transactions currently match threat profile rules. The live payment processing channels are fully secure.
+              {scanned === 0
+                ? "You have no scored payments yet. Run a pre-payment check, or upload a statement, and flagged payments will appear here."
+                : `None of your ${scanned} most recent payments were flagged. This is what the ` +
+                  `model found, not a guarantee - it misses some fraud, so keep checking payees before you pay.`}
             </p>
           </div>
         </div>

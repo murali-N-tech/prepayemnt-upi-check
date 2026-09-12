@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from backend.app.services.vpa import VpaFinding
+from backend.app.services.vpa import VpaFinding, total_weight
 
 INTENTS: dict[str, str] = {
     "bill": "Paying a bill",
@@ -42,8 +42,7 @@ class IntentAnalysis:
 
     @property
     def score(self) -> int:
-        from backend.app.services.vpa import SEVERITY_WEIGHT
-        return min(100, sum(SEVERITY_WEIGHT[f.severity] for f in self.findings))
+        return total_weight(self.findings)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -78,7 +77,17 @@ def analyse_intent(
 
     intent = intent.strip().lower()
     if intent not in INTENTS:
-        return IntentAnalysis(supplied=False)
+        # Say so rather than returning the same shape as "nothing supplied".
+        # A UI value drifting from this table would otherwise delete an
+        # evidence family with no trace anywhere.
+        return IntentAnalysis(
+            supplied=False,
+            findings=[VpaFinding(
+                "intent_unrecognised", "info",
+                f"'{intent}' is not a purpose this system knows, so the stated-purpose "
+                f"check did not run."
+            )],
+        )
 
     findings: list[VpaFinding] = []
 
@@ -91,7 +100,11 @@ def analyse_intent(
         findings.append(VpaFinding(
             "intent_payee_mismatch", "high",
             f"You said this is a bill, but the money would go to {who}. Utilities and "
-            f"billers are paid through registered merchant addresses, never a personal one."
+            f"billers are paid through registered merchant addresses, never a personal one.",
+            # A bill "payable" to a phone number is a flat contradiction; one
+            # payable to an address that merely carries no merchant details is
+            # a strong suspicion. Both used to score an identical 35.
+            weight=50 if is_phone_payee else 38,
         ))
     elif intent == "shop" and unbusinesslike:
         # Deliberately softer: plenty of small shops really do use a personal
@@ -100,7 +113,10 @@ def analyse_intent(
             "intent_payee_mismatch", "warn",
             "You said this is a shop, but this address carries no merchant details and "
             "has no history here. Small shops often do use a personal UPI ID - check the "
-            "name shown matches the shop."
+            "name shown matches the shop.",
+            # Deliberately near the bottom of the band: plenty of real shops
+            # use a personal UPI ID, so this is a question, not a case.
+            weight=18 if is_phone_payee else 12,
         ))
 
     if intent == "refund":
@@ -115,14 +131,19 @@ def analyse_intent(
         findings.append(VpaFinding(
             "investment_to_stranger", "high",
             "Investments paid directly to an individual UPI address, rather than to "
-            "a regulated intermediary, are not recoverable if this goes wrong."
+            "a regulated intermediary, are not recoverable if this goes wrong.",
+            weight=52 if is_phone_payee else 44,
         ))
 
     if intent == "asked_to":
         findings.append(VpaFinding(
             "instructed_payment", "high",
             "You are paying because someone asked you to. That is the setup for "
-            "almost every UPI scam - check who asked, on a number you already had."
+            "almost every UPI scam - check who asked, on a number you already had.",
+            # The payer has told us the premise of nearly every UPI scam
+            # applies to this payment. Weighted high within the band, but not
+            # at the top: being asked to pay is also how ordinary life works.
+            weight=44,
         ))
 
     return IntentAnalysis(supplied=True, intent=intent, findings=findings)

@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { amountProblem, describeCap, rupeeInputProps } from "../lib/upiLimits";
 import { Search, AlertTriangle, ShieldCheck, HelpCircle, MapPin, Landmark } from "lucide-react";
 import { PersonalizedAssessment } from "../types";
 import { useAuth } from "../context/AuthContext";
@@ -73,15 +74,23 @@ export default function PrePaymentRiskCheck() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-ink-muted mb-1">Amount (INR) *</label>
+              <label className="block text-sm font-medium text-ink-muted mb-1">
+                Amount (INR) * <span className="text-ink-subtle font-normal">max {describeCap()}</span>
+              </label>
+              {/* The field had no max, so ₹1 crore could be typed and sent. UPI
+                  does not carry more than ₹1 lakh in one payment, so scoring one
+                  produces a fraud verdict about a payment that cannot happen. */}
               <input
-                type="number"
+                {...rupeeInputProps}
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 placeholder="₹ Amount"
                 required
                 className="w-full px-4 py-2 bg-inset border border-line rounded-lg text-ink placeholder-ink-subtle focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
+              {amountProblem(amount) && (
+                <p className="text-xs text-warn mt-1.5">{amountProblem(amount)}</p>
+              )}
             </div>
 
             <div>

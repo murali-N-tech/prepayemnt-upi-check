@@ -38,4 +38,15 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Live QR scanning on the CheckPay screen. getUserMedia inside the
+         Capacitor WebView needs the app itself to hold CAMERA, otherwise the
+         browser-level prompt never appears and the scanner fails with
+         NotAllowedError. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- required="false" so the app still installs on a device with no camera:
+         the Photo and Type tabs work without one. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 </manifest>

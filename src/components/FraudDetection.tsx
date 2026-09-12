@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { amountProblem, describeCap, rupeeInputProps } from "../lib/upiLimits";
 import { ShieldCheck, Cpu, Sliders } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
@@ -17,6 +18,13 @@ export default function FraudDetection() {
     e.preventDefault();
     if (!merchant.trim() || !amount) {
       setError("Please fill out Merchant and Amount.");
+      return;
+    }
+    // Caught here rather than as a 422 from the backend, which is what used to
+    // happen for any amount over the UPI per-transaction cap.
+    const badAmount = amountProblem(amount);
+    if (badAmount) {
+      setError(badAmount);
       return;
     }
 
@@ -76,10 +84,10 @@ export default function FraudDetection() {
             <div>
               <label className="block text-sm font-medium text-ink-muted mb-1">Amount (INR)</label>
               <input
-                type="number"
+                {...rupeeInputProps}
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
-                placeholder="₹ Amount"
+                placeholder={`₹ Amount (max ${describeCap()})`}
                 required
                 className="w-full px-4 py-2 bg-inset border border-line rounded-lg text-ink placeholder-ink-subtle focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
@@ -91,9 +99,13 @@ export default function FraudDetection() {
                 <Sliders className="h-3.5 w-3.5" /> Biometrics & Device Scores
               </h3>
 
+              {/* "Device Trust Score" was backwards: the backend treats this as
+                  a RISK score and adds it to the behavioural risk, so a person
+                  who set it to 1.00 meaning "this is my own phone" raised the
+                  risk by 0.4 instead of lowering it. */}
               <div>
                 <div className="flex justify-between text-xs text-ink-muted mb-1">
-                  <span>Device Trust Score</span>
+                  <span>Device risk <span className="text-ink-subtle">(0 = my usual device)</span></span>
                   <span className="text-ink font-semibold">{deviceScore.toFixed(2)}</span>
                 </div>
                 <input
@@ -109,7 +121,7 @@ export default function FraudDetection() {
 
               <div>
                 <div className="flex justify-between text-xs text-ink-muted mb-1">
-                  <span>Geographic Location Score</span>
+                  <span>Location risk <span className="text-ink-subtle">(0 = where I usually pay)</span></span>
                   <span className="text-ink font-semibold">{locationScore.toFixed(2)}</span>
                 </div>
                 <input
@@ -169,10 +181,34 @@ export default function FraudDetection() {
             <div className="space-y-6 animate-fade-in" id="analysis-result">
               {/* Core Risk Metrics */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* This card used to read "Risk Score 13 / out of 100" beside a
+                    "BLOCKED" verdict, because risk_score is the CALIBRATED
+                    PROBABILITY of fraud times 100 while the decision threshold
+                    is about 0.13 - the point that holds false positives to 1 in
+                    100 at a ~1% base rate. Both numbers were right; showing the
+                    score with no threshold beside it made them look like a
+                    contradiction. Show what the decision was actually made on. */}
                 <div className="bg-surface border border-line rounded-xl p-6 text-center">
-                  <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider block">Risk Score</span>
-                  <span className="text-6xl font-black text-ink block mt-2">{result.risk_score}</span>
-                  <span className="text-xs text-ink-subtle block mt-2">out of 100</span>
+                  <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider block">
+                    Fraud probability
+                  </span>
+                  <span className="text-6xl font-black text-ink block mt-2">
+                    {result.probability != null
+                      ? `${(result.probability * 100).toFixed(1)}%`
+                      : result.risk_score}
+                  </span>
+                  {result.threshold != null && (
+                    <span className="text-xs text-ink-subtle block mt-2">
+                      flagged at {(result.threshold * 100).toFixed(1)}% — the point that keeps
+                      false alarms to {((result.fpr_budget ?? 0.01) * 100).toFixed(0)} in 100
+                      good payments
+                    </span>
+                  )}
+                  {result.decided_by && (
+                    <span className="text-[11px] text-ink-faint block mt-1">
+                      decided by: {result.decided_by}
+                    </span>
+                  )}
                 </div>
 
                 <div className={`border rounded-xl p-6 flex flex-col justify-center items-center ${

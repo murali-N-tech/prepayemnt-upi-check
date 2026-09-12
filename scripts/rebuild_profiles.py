@@ -42,12 +42,18 @@ from backend.app.services.statement_parser import (  # noqa: E402
     parse_statement_file,
 )
 
-NATURAL_KEY = "user_id, timestamp, amount, merchant, reference_number"
+# COALESCE so NULLs compare equal. GROUP BY already treats them that way,
+# but the UNIQUE index built from this key did not, and that is what makes
+# INSERT OR IGNORE work on re-upload. See profile_store._ensure_schema.
+NATURAL_KEY = (
+    "user_id, COALESCE(timestamp, ''), amount, COALESCE(merchant, ''), "
+    "COALESCE(reference_number, '')"
+)
 UPLOADS = ROOT / "data" / "uploaded_statements"
 
 COLUMNS = (
     "statement_id, user_id, timestamp, amount, merchant, upi_id, status, "
-    "reference_number, source_type, raw_line, txn_type, created_at"
+    "reference_number, source_type, raw_line, txn_type, time_known, created_at"
 )
 
 
@@ -89,6 +95,11 @@ def stage_compact(conn: sqlite3.Connection, max_rows: int) -> None:
             source_type TEXT,
             raw_line TEXT,
             txn_type TEXT NOT NULL DEFAULT 'DEBIT',
+            -- Was missing here. The rebuild dropped the column, _ensure_schema
+            -- re-added it on the next open with DEFAULT 1, and every row
+            -- fixtimes had marked "no time recorded" silently became a real
+            -- midnight or noon payment again.
+            time_known INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL
         )
         """
@@ -99,7 +110,8 @@ def stage_compact(conn: sqlite3.Connection, max_rows: int) -> None:
             INSERT INTO st_new ({COLUMNS})
             SELECT statement_id, user_id, timestamp, amount, merchant, upi_id, status,
                    reference_number, source_type, raw_line,
-                   UPPER(COALESCE(NULLIF(TRIM(txn_type), ''), 'DEBIT')), created_at
+                   UPPER(COALESCE(NULLIF(TRIM(txn_type), ''), 'DEBIT')),
+                   COALESCE(time_known, 1), created_at
             FROM (
                 SELECT *, ROW_NUMBER() OVER (
                     PARTITION BY user_id
@@ -122,7 +134,7 @@ def stage_compact(conn: sqlite3.Connection, max_rows: int) -> None:
             "CREATE INDEX IF NOT EXISTS ix_stmt_user_ts ON statement_transactions(user_id, timestamp)"
         )
         conn.execute(
-            f"CREATE UNIQUE INDEX IF NOT EXISTS ux_stmt_tx ON statement_transactions({NATURAL_KEY})"
+            f"CREATE UNIQUE INDEX IF NOT EXISTS ux_stmt_tx_v2 ON statement_transactions({NATURAL_KEY})"
         )
     n = conn.execute("SELECT COUNT(*) FROM statement_transactions").fetchone()[0]
     print(f"  table rebuilt: {n:,} rows kept")
@@ -191,10 +203,10 @@ def stage_dedupe(conn: sqlite3.Connection) -> None:
     try:
         with conn:
             conn.execute(
-                f"CREATE UNIQUE INDEX IF NOT EXISTS ux_stmt_tx "
+                f"CREATE UNIQUE INDEX IF NOT EXISTS ux_stmt_tx_v2 "
                 f"ON statement_transactions({NATURAL_KEY})"
             )
-        print("  unique index ux_stmt_tx in place")
+        print("  unique index ux_stmt_tx_v2 in place")
     except sqlite3.IntegrityError as exc:
         print(f"  unique index not created: {exc}")
 
@@ -304,8 +316,9 @@ def stage_reparse(conn: sqlite3.Connection) -> None:
             conn.executemany(
                 """INSERT OR IGNORE INTO statement_transactions
                    (statement_id, user_id, timestamp, amount, merchant, upi_id, status,
-                    reference_number, source_type, raw_line, txn_type, created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))""",
+                    reference_number, source_type, raw_line, txn_type, time_known,
+                    created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))""",
                 [
                     (
                         "stmt_rebuilt",
@@ -319,6 +332,7 @@ def stage_reparse(conn: sqlite3.Connection) -> None:
                         "rebuilt",
                         t.get("raw_line"),
                         str(t.get("txn_type") or "DEBIT").upper(),
+                        1 if t.get("time_known", True) else 0,
                     )
                     for t in fresh
                 ],
@@ -384,7 +398,9 @@ def main() -> int:
 
     conn = _open(DB_PATH)
     stages = (
-        ["compact", "junk", "fixtimes", "reparse", "profiles"]
+        # reparse before fixtimes: reparse replaces a user's rows wholesale,
+        # so running fixtimes first marked rows that were about to be deleted.
+        ["compact", "junk", "reparse", "fixtimes", "profiles"]
         if args.stage == "all"
         else [args.stage]
     )

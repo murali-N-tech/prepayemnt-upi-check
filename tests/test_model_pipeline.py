@@ -94,7 +94,41 @@ def test_known_payee_values_come_from_the_reputation_store():
     assert f["payee_age_days"] == 9
     assert f["payee_distinct_payers"] == 24
     assert f["payee_repeat_ratio"] == 0
-    assert f["payee_is_new"] == 1
+    # With no payer supplied, "new" falls back to "have we seen this payee at
+    # all" - and we have. This assertion used to read == 1, encoding the bug
+    # it was meant to guard: payee_is_new was computed from the payee's repeat
+    # payers, a property of the payee's whole network, when the model was
+    # trained on "has THIS payer paid THIS payee before".
+    assert f["payee_is_new"] == 0
+
+
+def test_payee_is_new_follows_the_payer_not_the_payee_network():
+    """The feature the model was actually trained on."""
+    known_payee = {"known": True, "age_days": 400, "distinct_payers": 90, "repeat_payers": 60}
+    first_time = build_features(500, None, reputation=known_payee, payer_seen_payee_before=False)
+    returning = build_features(500, None, reputation=known_payee, payer_seen_payee_before=True)
+    assert first_time["payee_is_new"] == 1, "a well-established payee is still new to a first-time payer"
+    assert returning["payee_is_new"] == 0
+
+
+def test_a_known_payee_with_no_recorded_age_is_not_called_zero_days_old():
+    """age_days is None when payers exist but no reputation row does.
+
+    Guarding on `known` alone let that None become 0.0 - a zero-day-old
+    account, which is the strongest mule signal the model has.
+    """
+    f = build_features(
+        500, None,
+        reputation={"known": True, "age_days": None, "distinct_payers": 3, "repeat_payers": 0},
+    )
+    assert f["payee_age_days"] == 180.0
+
+
+def test_the_amount_ratio_uses_the_median_the_model_was_trained_on():
+    profile = {"avg_amount": 431.5, "median_amount": 300.0}
+    assert build_features(600, None, profile=profile)["amount_over_user_avg"] == 2.0
+    # Older profiles have no median; fall back rather than failing.
+    assert build_features(600, None, profile={"avg_amount": 300.0})["amount_over_user_avg"] == 2.0
 
 
 def test_night_and_hour_distance():

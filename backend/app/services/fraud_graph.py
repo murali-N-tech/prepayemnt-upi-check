@@ -53,7 +53,10 @@ class GraphSignals:
     fan_in: int = 0                 # payees only: how many people paid it
     fan_out: int = 0                # payers only: how many payees they paid
     repeat_ratio: float = 0.0       # share of payers who paid more than once
-    lifespan_days: Optional[int] = None
+    lifespan_days: Optional[float] = None
+    # First-seen to first-seen: how tightly the payers arrived. Distinct
+    # from lifespan, which runs to the most recent PAYMENT.
+    arrival_span_days: Optional[float] = None
     payments_per_day: Optional[float] = None
     component_size: int = 0
     findings: list[str] = field(default_factory=list)
@@ -188,9 +191,16 @@ def signals_for(node: str, g: nx.Graph, edges: list[Edge]) -> GraphSignals:
     firsts = [d for d in (_parse(e.first_at) for e in incident) if d]
     lasts = [d for d in (_parse(e.last_at) for e in incident) if d]
     if firsts and lasts:
-        s.lifespan_days = max(0, (max(lasts) - min(firsts)).days)
+        # .days floors, so a 2.9-day window became 2 and the rate came out
+        # 10/2 = 5.0, crossing the >= 5 threshold that 10/2.917 = 3.43 does
+        # not - a fabricated "averaging 5 payments a day" finding.
+        s.lifespan_days = max(0.0, (max(lasts) - min(firsts)).total_seconds() / 86400.0)
+        # Arrival span is first-seen to first-seen. Using the last PAYMENT
+        # time meant one payer returning months later stretched the window and
+        # silenced the burst finding entirely.
+        s.arrival_span_days = max(0.0, (max(firsts) - min(firsts)).total_seconds() / 86400.0)
         total = sum(e.payments for e in incident)
-        s.payments_per_day = round(total / max(s.lifespan_days, 1), 2)
+        s.payments_per_day = round(total / max(s.lifespan_days, 1.0), 2)
 
     component = nx.node_connected_component(g, node)
     s.component_size = len(component)
@@ -202,9 +212,9 @@ def signals_for(node: str, g: nx.Graph, edges: list[Edge]) -> GraphSignals:
                 f"{s.fan_in} different people have paid this address and "
                 f"{'none' if s.repeat_ratio == 0 else 'almost none'} paid twice."
             )
-        if s.lifespan_days is not None and s.lifespan_days <= 30 and s.fan_in >= 10:
+        if s.arrival_span_days is not None and s.arrival_span_days <= 30 and s.fan_in >= 10:
             s.findings.append(
-                f"All {s.fan_in} payers arrived within {s.lifespan_days} days."
+                f"All {s.fan_in} payers arrived within {s.arrival_span_days:.0f} days."
             )
         if s.payments_per_day is not None and s.payments_per_day >= 5 and s.fan_in >= 10:
             s.findings.append(
@@ -214,7 +224,7 @@ def signals_for(node: str, g: nx.Graph, edges: list[Edge]) -> GraphSignals:
         if s.fan_out >= 15 and s.lifespan_days is not None and s.lifespan_days <= 7:
             s.findings.append(
                 f"This payer sent money to {s.fan_out} different addresses in "
-                f"{s.lifespan_days} days, which is what a compromised account looks like."
+                f"{s.lifespan_days:.0f} days, which is what a compromised account looks like."
             )
 
     return s
@@ -234,7 +244,8 @@ def suspicious_payees(edges: list[Edge], limit: int = 25) -> list[dict[str, Any]
                 "kind": "payee",
                 "fan_in": s.fan_in,
                 "repeat_ratio": s.repeat_ratio,
-                "lifespan_days": s.lifespan_days,
+                "lifespan_days": None if s.lifespan_days is None else round(s.lifespan_days, 2),
+                "arrival_span_days": None if s.arrival_span_days is None else round(s.arrival_span_days, 2),
                 "payments_per_day": s.payments_per_day,
                 "reasons": s.findings,
             }

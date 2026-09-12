@@ -17,10 +17,15 @@ export interface BehaviorProfile {
   debit_count?: number;
   credit_count?: number;
   avg_amount: number;
+  median_amount?: number;
   max_amount: number;
   min_amount: number;
   most_active_hour: number | null;
   night_transactions: number;
+  /** Rows that carried a real clock time. The denominator for night_transactions. */
+  timed_transaction_count?: number;
+  /** Every distinct payee, not the top 10 merchant_frequency holds. */
+  distinct_payees?: number;
   weekend_transactions: number;
   transactions_without_time?: number;
   favorite_merchants: string[];

@@ -22,16 +22,24 @@ export default function FraudHeatmap() {
       setLoading(true);
       setError(null);
       try {
-        const data = await api<{ error?: string; amount?: number[]; risk?: number[] }>(
-          "/api/heatmap"
-        );
+        const data = await api<{
+          error?: string;
+          amount?: number[];
+          risk?: number[];
+          risk_score?: number[];
+        }>("/api/heatmap");
         const risk = data.risk;
+        const scores = data.risk_score;
         if (data.error) {
           setError(data.error);
         } else if (data.amount && risk) {
+          // The y-axis used to be Math.random() * 20 + (risk ? 75 : 15) - a
+          // "risk score" this component made up, which moved every reload and
+          // matched nothing the model produced. The stored score is what the
+          // chart is supposed to be plotting.
           const points: HeatmapPoint[] = data.amount.map((amount: number, idx: number) => ({
             amount,
-            riskScore: Math.floor(Math.random() * 20) + (risk[idx] === 1 ? 75 : 15), // recreate risk score spread
+            riskScore: scores?.[idx] ?? (risk[idx] === 1 ? 80 : 20),
             riskLevel: risk[idx],
           }));
           setDataPoints(points);

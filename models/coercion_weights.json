@@ -1,31 +1,31 @@
 {
-  "trained_at": "2026-09-10T14:25:32+00:00",
+  "trained_at": "2026-09-12T08:34:33+00:00",
   "feature_order": [
     "authority",
     "urgency",
     "fear",
     "pay_request",
+    "credential_request",
     "secrecy",
     "remote_control",
     "verify_payment",
     "lure",
-    "contact_offline",
-    "credential_request"
+    "contact_offline"
   ],
   "coefficients": {
     "authority": 0.0528,
     "urgency": 2.6775,
     "fear": 2.9107,
     "pay_request": 4.0031,
+    "credential_request": 0.4186,
     "secrecy": 3.993,
     "remote_control": 2.8762,
     "verify_payment": 1.9834,
     "lure": 3.3632,
-    "contact_offline": 2.4292,
-    "credential_request": 0.4186
+    "contact_offline": 2.4292
   },
   "intercept": -5.5996,
-  "threshold": 0.36,
+  "threshold": 0.16,
   "metrics": {
     "corpus": {
       "total": 1022,
@@ -36,12 +36,12 @@
     },
     "held_out": {
       "n": 307,
-      "recall_on_scams": 0.945,
-      "false_positive_rate_hard_negatives": 0.023,
+      "recall_on_scams": 0.743,
+      "false_positive_rate_hard_negatives": 0.006,
       "false_positive_rate_easy_negatives": 0.0,
-      "roc_auc": 0.9974,
-      "pr_auc": 0.9935,
-      "threshold": 0.36,
+      "roc_auc": 0.9682,
+      "pr_auc": 0.9215,
+      "threshold": 0.16,
       "threshold_chosen_by": "lowest threshold with <=5% false positives on hard negatives, measured on train"
     },
     "per_pattern_on_full_corpus": {
@@ -64,6 +64,11 @@
         "fires_on": 379,
         "precision": 0.689,
         "recall": 0.717
+      },
+      "credential_request": {
+        "fires_on": 113,
+        "precision": 0.274,
+        "recall": 0.085
       },
       "secrecy": {
         "fires_on": 105,
@@ -89,15 +94,10 @@
         "fires_on": 150,
         "precision": 0.667,
         "recall": 0.275
-      },
-      "credential_request": {
-        "fires_on": 113,
-        "precision": 0.274,
-        "recall": 0.085
       }
     }
   },
   "environment": {
-    "python": "3.10.4"
+    "python": "3.11.15"
   }
 }

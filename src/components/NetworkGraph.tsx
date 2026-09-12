@@ -6,6 +6,7 @@ import { useChartTheme } from "../lib/chartTheme";
 interface Edge {
   user: string;      // payer
   merchant: string;  // payee
+  payments?: number; // how many times this payer paid this payee
 }
 
 interface Flag {
@@ -99,6 +100,11 @@ export default function NetworkGraph() {
   }, [edges]);
 
   const flagged = useMemo(() => new Set(flags.map((f) => f.node)), [flags]);
+
+  const totalPayments = useMemo(
+    () => edges.reduce((n, e) => n + (e?.payments ?? 1), 0),
+    [edges]
+  );
 
   /** Every payee, ranked by the thing that matters: how many different people
    *  paid it, and how many of those paid nobody else. */
@@ -251,11 +257,17 @@ export default function NetworkGraph() {
       )}
 
       {/* Three numbers, stated plainly. */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {[
           { label: "Payers", value: index.payerToPayees.size, note: "distinct senders" },
           { label: "Payees", value: index.payeeToPayers.size, note: "distinct receivers" },
-          { label: "Payments", value: edges.length, note: "payer → payee links" },
+          // edges.length is the number of distinct payer -> payee PAIRS, not
+          // the number of payments: a payer who paid one shop forty times is
+          // one edge. The endpoint sends the count on each edge; sum it, and
+          // show the pair count as its own number rather than mislabelling one
+          // as the other.
+          { label: "Payments", value: totalPayments, note: "across all links" },
+          { label: "Links", value: edges.length, note: "distinct payer → payee pairs" },
           {
             label: "Flagged payees",
             value: flags.length,

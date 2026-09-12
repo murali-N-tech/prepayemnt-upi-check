@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+from collections import Counter
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -53,8 +54,30 @@ def _fix_double_struck(text: str) -> str:
     return "".join(out)
 
 
+# PhonePe's statement font carries no ToUnicode entry for the colon glyph, so
+# the extracted text has a control character where the time separator should
+# be: "10\x0016 pm" is 10:16 pm. Left alone this cost twice - the time never
+# matched, so every row was recorded as time-unknown, AND the unmatched
+# "10 16 pm" stayed in the description and was glued onto the merchant name
+# ("GATE CHAITHANYA 09 13 pm").
+#
+# A control character sitting between two digits in a PDF text layer is a
+# glyph that failed to map, and in a statement the character it failed to map
+# is a colon. Anywhere else a control character is just noise, so it becomes a
+# space rather than being guessed at.
+_LOST_COLON_RE = re.compile(r"(?<=\d)[\x00-\x08\x0b\x0c\x0e-\x1f\ufffd](?=\d)")
+_OTHER_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _repair_lost_glyphs(text: str) -> str:
+    return _OTHER_CONTROL_RE.sub(" ", _LOST_COLON_RE.sub(":", text))
+
+
 def _normalize_text(text: str) -> str:
-    if text and _looks_double_struck(text):
+    if not text:
+        return text
+    text = _repair_lost_glyphs(text)
+    if _looks_double_struck(text):
         return _fix_double_struck(text)
     return text
 
@@ -302,7 +325,9 @@ def _extract_from_text(pdf: "pdfplumber.PDF", source_name: str) -> List[_Transac
 # 3c. MULTI-LINE BLOCK EXTRACTION (PhonePe/GPay/Paytm app statements)
 
 _BLOCK_DATE_RE = re.compile(r"^([A-Za-z]{3}\s\d{1,2},?\s\d{4})\b")
-_BLOCK_TIME_RE = re.compile(r"\b\d{1,2}:\d{2}\s?[AP]M\b")
+# Case-insensitive because PhonePe writes "pm" and Google Pay writes "AM";
+# the seconds group and the dotted "a.m." form cost nothing to accept.
+_BLOCK_TIME_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\s?[AP]\.?M\.?\b", re.IGNORECASE)
 _BLOCK_TYPE_RE = re.compile(r"\b(DEBIT|CREDIT)\b", re.IGNORECASE)
 _BLOCK_AMOUNT_RE = re.compile(r"₹\s?(-?\d[\d,]*\.?\d*)")
 _BLOCK_TXNID_RE = re.compile(r"Transaction\s*ID[:\s]*([A-Za-z0-9]+)", re.IGNORECASE)
@@ -614,11 +639,20 @@ def _parse_pdf_with_pdfplumber(content: bytes, source_name: str = "statement.pdf
         if best_txns:
             print(f"  [pdfplumber] Using strategy: {strategy} ({len(best_txns)} transactions)")
 
-        # De-duplicate
+        # De-duplicate.
+        #
+        # The key has to include the clock time and the transaction reference.
+        # Without them, two genuine payments of the same amount to the same
+        # shop on the same day collapse into one - which is an ordinary thing
+        # to do (a tea shop twice in a day) and was silently costing a row.
+        # It went unnoticed only because the time used to be left stuck in the
+        # description, which made the two look different by accident; fixing
+        # the time extraction removed that accident and exposed this.
         seen: set[tuple] = set()
         unique: list[_Transaction] = []
         for t in best_txns:
-            key = (t.date, t.description, t.debit, t.credit, t.balance)
+            key = (t.date, t.time_str, t.description, t.debit, t.credit,
+                   t.balance, t.upi_ref)
             if key not in seen:
                 seen.add(key)
                 unique.append(t)
@@ -797,6 +831,15 @@ def _parse_csv_statement(content: bytes) -> list[dict[str, Any]]:
                     date_value = v
         raw_timestamp = _join_values(date_value, time_value)
 
+        # A single `timestamp`/`datetime` column carries the clock time inside
+        # it. The loop above deliberately routes those to date_value, so
+        # `time_value` stays None and the row was recorded as time-unknown -
+        # discarding every hour statistic for CSV-sourced profiles. Look at
+        # what the value actually contains instead of which column it came from.
+        has_clock = bool(time_value) or bool(
+            re.search(r"\d{1,2}:\d{2}", str(raw_timestamp or ""))
+        )
+
         # Debit and credit columns mean opposite things; keep the direction.
         amount_value = None
         txn_type = "DEBIT"
@@ -854,7 +897,7 @@ def _parse_csv_statement(content: bytes) -> list[dict[str, Any]]:
         records.append(
             {
                 "timestamp": _normalize_timestamp(raw_timestamp),
-                "time_known": bool(_clean_optional(time_value)),
+                "time_known": has_clock,
                 "amount": _normalize_amount(amount_value),
                 "merchant": merchant_text,
                 "upi_id": _clean_optional(upi_id),
@@ -1017,43 +1060,112 @@ def _extract_bank_transactions(
     return _dedupe_transactions(transactions)
 
 
+# The most lines one wallet record ever spans: date, time, "Paid to X", the
+# VPA, a transaction id, a UTR, the amount, the status, plus slack.
+_MAX_BLOCK_LINES = 14
+
+
 def _build_provider_blocks(
     lines: list[str],
     keyword_groups: tuple[tuple[str, ...], ...],
 ) -> list[list[str]]:
+    """Group the lines of a wallet statement into one block per transaction.
+
+    The previous version treated a keyword match as a record BOUNDARY as well
+    as a relevance signal, and the keyword lists contain "to", "from", "utr"
+    and "transaction id" - so nearly every line of a PhonePe statement was an
+    anchor and a new block was opened at each one. A single transaction came
+    out as five blocks:
+
+        ['01 Jun 2026', '09:12 AM']
+        ['Paid to Swiggy', 'swiggy@ibl']
+        ['PhonePe Transaction ID: PP123456789']
+        ['UTR: 123456789012', 'INR 420.00', 'SUCCESS']
+
+    None of which has both a date and an amount, so _transaction_from_text
+    rejected all of them and the PhonePe, Google Pay, Paytm and BHIM
+    extractors - four of the nine providers - returned an empty list for every
+    statement in this layout. The four skipped tests in
+    tests/test_statement_parser.py were recording that, not an environment
+    problem.
+
+    A date is the record boundary in these layouts. Keywords decide whether a
+    block is a transaction at all, which is what they are good for.
+    """
+    def starts_record(line: str) -> bool:
+        return DATE_RE.search(line) is not None
+
+    def is_relevant(block: list[str]) -> bool:
+        if not keyword_groups:
+            return True
+        joined = " ".join(block).lower()
+        return any(
+            any(keyword in joined for keyword in keywords) for keywords in keyword_groups
+        )
+
     blocks: list[list[str]] = []
     current: list[str] = []
 
-    def is_anchor(line: str) -> bool:
-        lowered = line.lower()
-        if DATE_RE.search(line):
-            return True
-        return any(any(keyword in lowered for keyword in keywords) for keywords in keyword_groups)
-
-    def has_strong_signal(line: str) -> bool:
-        lowered = line.lower()
-        return (
-            STATUS_RE.search(line) is not None
-            or REF_RE.search(line) is not None
-            or UPI_RE.search(line) is not None
-            or _extract_amount_from_line(line) is not None
-            or any(keyword in lowered for keywords in keyword_groups for keyword in keywords)
-        )
-
-    for idx, line in enumerate(lines):
-        if is_anchor(line) and current:
+    for line in lines:
+        if starts_record(line):
+            # A date on the same line as the previous record's data is still a
+            # new record; a date-only line after a complete record is too.
+            if current:
+                blocks.append(current)
+            current = [line]
+            continue
+        if not current:
+            # Header lines before the first dated row.
+            continue
+        # A second clock line with no date belongs to the record being built
+        # (PhonePe prints the date and the time on separate lines).
+        current.append(line)
+        if len(current) >= _MAX_BLOCK_LINES:
             blocks.append(current)
             current = []
-        if is_anchor(line) or current:
-            current.append(line)
-        if current and has_strong_signal(line):
-            next_line_is_anchor = idx + 1 < len(lines) and is_anchor(lines[idx + 1])
-            if next_line_is_anchor or len(current) >= 8:
-                blocks.append(current)
-                current = []
     if current:
         blocks.append(current)
-    return blocks
+
+    # A record whose date sits on its own line is followed by the time on the
+    # next line, so the block that opened on the date carries everything. But a
+    # statement that prints a date on EVERY line (a bank table) yields one-line
+    # blocks, and those are handled by the line-by-line path already.
+    return [b for b in blocks if is_relevant(b)]
+
+
+_CREDIT_WORDS = re.compile(
+    r"\b(credit(ed)?|received from|refund(ed)?|cashback|deposit|salary|cr)\b", re.I
+)
+_DEBIT_WORDS = re.compile(r"\b(debit(ed)?|paid to|sent to|withdrawn|purchase|dr)\b", re.I)
+
+
+_CLOCK_RE = re.compile(r"\d{1,2}:\d{2}")
+
+
+def _has_clock(text: str) -> bool:
+    """Did this row actually carry a wall-clock time?
+
+    A date-only row gets a midnight timestamp so it can still be sorted, and
+    without this flag profile_store counted every one of them as a genuine
+    00:0x payment: most_active_hour came out 0 and the night-window ratio
+    approached 1.0 on statements that simply print no times.
+    """
+    return bool(_CLOCK_RE.search(text or ""))
+
+
+def _direction_from_text(text: str) -> str:
+    """DEBIT unless the line says otherwise.
+
+    The pdfplumber block extractors read an explicit DEBIT/CREDIT column; this
+    older text path has only the wording, so it reads that rather than
+    assuming every row is money going out.
+    """
+    body = text or ""
+    if _DEBIT_WORDS.search(body):
+        return "DEBIT"
+    if _CREDIT_WORDS.search(body):
+        return "CREDIT"
+    return "DEBIT"
 
 
 def _transaction_from_text(text: str) -> dict[str, Any] | None:
@@ -1075,6 +1187,13 @@ def _transaction_from_text(text: str) -> dict[str, Any] | None:
         "status": status,
         "reference_number": reference,
         "raw_line": text,
+        # Both of these were missing on this path. profile_store defaults the
+        # absent keys to DEBIT and time_known=1, so credits joined the
+        # spending average and date-only rows became genuine midnight
+        # payments - most_active_hour 0 and every row counted as a night
+        # transaction.
+        "txn_type": _direction_from_text(text),
+        "time_known": _has_clock(text),
     }
 
 
@@ -1097,6 +1216,12 @@ def _transaction_from_bank_line(line: str, bank_name: str) -> dict[str, Any] | N
         "status": status,
         "reference_number": reference,
         "raw_line": line,
+        # txn_type / time_known were absent on this path too. profile_store
+        # defaults the missing keys to DEBIT and time_known=1, which folded
+        # credits into the spending average and turned date-only rows into
+        # real midnight payments.
+        "txn_type": _direction_from_text(line),
+        "time_known": _has_clock(line),
     }
 
 
@@ -1121,6 +1246,8 @@ def _extract_transactions_from_lines(lines: list[str]) -> list[dict[str, Any]]:
             "status": status,
             "reference_number": reference,
             "raw_line": line,
+            "txn_type": _direction_from_text(line),
+            "time_known": _has_clock(line),
         }
         if _looks_like_transaction(candidate["raw_line"], candidate["upi_id"], candidate["reference_number"]):
             transactions.append(candidate)
@@ -1151,6 +1278,8 @@ def _extract_transactions_from_blocks(lines: list[str]) -> list[dict[str, Any]]:
             "status": status,
             "reference_number": reference,
             "raw_line": merged,
+            "txn_type": _direction_from_text(merged),
+            "time_known": _has_clock(merged),
         })
 
     if not transactions:
@@ -1174,6 +1303,8 @@ def _extract_transactions_from_blocks(lines: list[str]) -> list[dict[str, Any]]:
                 "status": status,
                 "reference_number": reference,
                 "raw_line": merged,
+                "txn_type": _direction_from_text(merged),
+                "time_known": _has_clock(merged),
             })
     return _dedupe_transactions(transactions)
 
@@ -1226,6 +1357,11 @@ def _extract_timestamp_from_line(line: str) -> str | None:
     return _normalize_timestamp(value)
 
 
+# The floor a candidate number must clear to be accepted as an amount. See
+# the note at the end of _extract_amount_from_line.
+MIN_AMOUNT_SCORE = 0
+
+
 def _extract_amount_from_line(line: str) -> float | None:
     candidates = list(AMOUNT_RE.finditer(line))
     if not candidates:
@@ -1268,6 +1404,16 @@ def _extract_amount_from_line(line: str) -> float | None:
             best_score = score
             best_value = amount_value
 
+    # The scoring already penalises reference-like numbers (-10 for a "txn"/
+    # "utr"/"ref" on the left, -8 for six or more digits before the decimal),
+    # but the best candidate was returned however bad its score was. So
+    # "PhonePe Transaction ID: PP123456789" scored -18 and still came back as
+    # an amount of Rs 123,456,789 - a fabricated transaction larger than
+    # anything real, which then became the user's max_amount and the
+    # denominator of their amount ratios. A genuine amount carrying no currency
+    # marker and no keyword still scores at least 2, so 0 is the floor.
+    if best_score < MIN_AMOUNT_SCORE:
+        return None
     return best_value
 
 
@@ -1406,10 +1552,12 @@ def generate_behavior_profile(transactions: list[dict[str, Any]]) -> dict[str, A
             "debit_count": 0,
             "credit_count": 0,
             "avg_amount": 0,
+            "median_amount": 0,
             "max_amount": 0,
             "min_amount": 0,
             "most_active_hour": None,
             "night_transactions": 0,
+            "timed_transaction_count": 0,
             "weekend_transactions": 0,
             "transactions_without_time": 0,
             "favorite_merchants": [],
@@ -1422,7 +1570,10 @@ def generate_behavior_profile(transactions: list[dict[str, Any]]) -> dict[str, A
         }
 
     df = pd.DataFrame(transactions).copy()
-    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
+    # Drop rows whose amount could not be read rather than calling them zero:
+    # a zeroed row pulls the mean down and becomes min_amount.
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+    df = df.loc[df["amount"].notna()].copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", format="mixed")
     df["merchant"] = df["merchant"].fillna("UNKNOWN_MERCHANT")
     df["status"] = df["status"].fillna("UNKNOWN").str.upper()
@@ -1513,10 +1664,25 @@ def generate_behavior_profile(transactions: list[dict[str, Any]]) -> dict[str, A
         "debit_count": int((df["txn_type"] == "DEBIT").sum()),
         "credit_count": int((df["txn_type"] == "CREDIT").sum()),
         "avg_amount": float(round(spend["amount"].mean(), 2)),
+        # The model's amount_over_user_avg feature is trained against a MEDIAN
+        # (see backend/ml/features.py). A mean on a long-tailed spend
+        # distribution sits about 1.4x higher, which made every served ratio
+        # too small. Both are recorded: the mean is what people expect to see,
+        # the median is what the model needs.
+        "median_amount": float(round(spend["amount"].median(), 2)),
+        # The real count. merchant_frequency is deliberately the top 10, and
+        # the UI was reading len() of it as "unique payees" - a number that
+        # could never exceed 10 however many payees the statement held.
+        "distinct_payees": int(spend["merchant"].nunique()),
         "max_amount": float(round(spend["amount"].max(), 2)),
         "min_amount": float(round(spend["amount"].min(), 2)),
         "most_active_hour": most_active_hour,
         "night_transactions": night_transactions,
+        # night_transactions is counted over the rows that carry a real clock
+        # time, so this - not transaction_count - is its denominator. Dividing
+        # by transaction_count halved the reported night ratio on any statement
+        # where half the rows print no time.
+        "timed_transaction_count": int(len(timed)) if not dated.empty else 0,
         "weekend_transactions": weekend_transactions,
         # How many rows carry a date but no usable time. When this is high the
         # hour-based rules have little to work with, and the user should be
@@ -1527,7 +1693,12 @@ def generate_behavior_profile(transactions: list[dict[str, Any]]) -> dict[str, A
         # before". Display names vary in case and spacing between statements,
         # so comparing them directly makes every repeat payment look new.
         "known_merchant_keys": all_keys,
-        "favorite_merchant_keys": sorted({k for k in spend_keys if k})[:40],
+        # By frequency, not alphabetically. sorted()[:40] kept the 40
+        # alphabetically-first payees, so a user's single most-paid merchant
+        # could be dropped from their own "familiar payees" list.
+        "favorite_merchant_keys": [
+            k for k, _ in Counter(k for k in spend_keys if k).most_common(40)
+        ],
         "average_daily_transactions": average_daily_transactions,
         "failed_transactions": int(
             df["status"].isin(["FAILED", "FAILURE", "DECLINED"]).sum()

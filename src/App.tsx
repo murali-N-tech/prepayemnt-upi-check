@@ -8,6 +8,8 @@ import AppHeader from "./components/layout/AppHeader";
 import { MobileSidebar, Sidebar } from "./components/layout/Sidebar";
 import { navItem, type PageID } from "./components/layout/nav";
 import ErrorBoundary from "./components/ui/ErrorBoundary";
+import Assistant from "./components/Assistant";
+import { CheckProvider } from "./context/CheckContext";
 
 import PayeeCheck from "./components/PayeeCheck.tsx";
 import StatementProfiling from "./components/StatementProfiling.tsx";
@@ -93,6 +95,9 @@ export default function App() {
   const current = navItem(activePage);
 
   return (
+    // CheckProvider so the assistant can see the last payee check and answer
+    // "why was this blocked?" about the result actually on screen.
+    <CheckProvider>
     <div className="min-h-screen bg-canvas text-ink font-sans flex flex-col" id="main-app-shell">
       <AppHeader activePage={activePage} onOpenMenu={() => setMobileMenuOpen(true)} />
 
@@ -120,6 +125,12 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      {/* Available on every page: the question people have is usually about a
+          result they are already looking at, so it follows them rather than
+          living on a page of its own. */}
+      <Assistant />
     </div>
+    </CheckProvider>
   );
 }

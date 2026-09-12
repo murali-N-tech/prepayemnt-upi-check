@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { useAuth } from "../../context/AuthContext";
 import { UpiStatusNote, useUpiStatus } from "./UpiStatusNote";
-import { AuthShell, fieldClass, labelClass, submitClass } from "./AuthShell";
+import { AuthShell, fieldClass, labelClass, submitClass, submitStyle } from "./AuthShell";
 import { getApiUrl } from "../../services/apiConfig";
 
 /** Same shape the server enforces, so the obvious mistakes are caught here. */
@@ -139,7 +139,7 @@ export const Register: React.FC<{
           />
         </div>
 
-        <button type="submit" disabled={loading} className={submitClass}>
+        <button type="submit" disabled={loading} className={submitClass} style={submitStyle}>
           {loading ? "Creating account…" : "Create account"}
         </button>
       </form>

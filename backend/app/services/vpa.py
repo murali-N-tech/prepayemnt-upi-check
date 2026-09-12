@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterable, Optional
 
 # ── PSP handles ────────────────────────────────────────────────────────────
 # The suffix after '@' identifies the payment service provider. An address on
@@ -94,12 +94,78 @@ _PHONE_RE = re.compile(r"^(?:\+?91[\s-]?)?([6-9]\d{9})$")
 # purpose: one critical finding is meant to be decisive on its own.
 SEVERITY_WEIGHT: dict[str, int] = {"info": 0, "warn": 12, "high": 35, "critical": 70}
 
+# How far a finding's own weight may stray from its severity band. A "warn"
+# that measures as a 30 is really a "high", and letting it score like one while
+# still being *presented* as a warning would make the two disagree. The bands
+# overlap slightly, which is deliberate: a severe instance of a lesser category
+# should be able to outweigh a mild instance of a greater one.
+SEVERITY_RANGE: dict[str, tuple[int, int]] = {
+    "info": (0, 0),
+    "warn": (6, 22),
+    "high": (24, 52),
+    "critical": (60, 100),
+}
+
 
 @dataclass
 class VpaFinding:
     code: str
     severity: str          # "info" | "warn" | "high" | "critical"
     message: str
+    # What this finding contributes to its family's score.
+    #
+    # Severity alone gave every finding one of exactly four values - 0, 12, 35
+    # or 70 - so the whole system could only ever produce a handful of final
+    # scores. Measured over 19 varied payments the output landed on just seven
+    # distinct numbers, and 40 came up in six of them, because `payee_unseen`
+    # (warn, 12) fires for every payee in a fresh database and any single
+    # high-severity finding beside it gives 35 + 0.4*12 = 39.8.
+    #
+    # Worse than looking fake, it threw away information the system had:
+    # `large_to_unfamiliar` scored 35 for a Rs 25,000 payment and 35 for a
+    # Rs 99,000 one, because the finding was a boolean over a continuous
+    # quantity.
+    #
+    # So a finding that can measure its own strength says so here, and one that
+    # is genuinely binary (an address impersonating a bank either does or does
+    # not) leaves it None and keeps the severity default.
+    weight: Optional[float] = None
+
+    def scored(self) -> float:
+        """The contribution this finding actually makes."""
+        if self.weight is None:
+            return float(SEVERITY_WEIGHT[self.severity])
+        low, high = SEVERITY_RANGE[self.severity]
+        return float(min(max(self.weight, low), high))
+
+
+def total_weight(findings: "Iterable[VpaFinding]") -> int:
+    """Sum of a family's findings, capped. One place, so the families cannot
+    drift apart in how they add their evidence up."""
+    return int(min(100, round(sum(f.scored() for f in findings))))
+
+
+def graded(low: float, high: float, value: float, floor: float, ceiling: float) -> float:
+    """Map `value` from the range [low, high] onto [floor, ceiling], clamped.
+
+    The shared helper for turning a measurement — an amount, an age in days, a
+    ratio — into a finding weight, so each call site states its two endpoints
+    and nothing invents its own curve.
+
+    `low` may be GREATER than `high`, and several callers need that: for an
+    account age, younger is worse, so the domain is written descending as
+    graded(30, 2, age_days, ...). The first version guarded with `high <= low`,
+    which was meant for a zero-width range but caught every deliberately
+    inverted one — graded(30, 2, ...) returned the ceiling for any age above 2
+    days, so a 25-day-old account scored exactly the same as a 1-day-old one
+    and `mule_pattern` came out at 94 for both. Only an actually zero-width
+    domain is degenerate.
+    """
+    if high == low:
+        return ceiling if value >= high else floor
+    t = (value - low) / (high - low)
+    t = min(max(t, 0.0), 1.0)
+    return floor + t * (ceiling - floor)
 
 
 @dataclass
@@ -117,7 +183,7 @@ class VpaAnalysis:
     @property
     def score(self) -> int:
         """0-100 contribution to the payee's risk, from the findings."""
-        return min(100, sum(SEVERITY_WEIGHT[f.severity] for f in self.findings))
+        return total_weight(self.findings)
 
 
 def normalise_vpa(value: str) -> str:

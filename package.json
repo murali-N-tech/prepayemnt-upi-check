@@ -18,6 +18,7 @@
     "@capacitor/core": "^8.5.0",
     "express": "^4.19.2",
     "form-data": "^4.0.6",
+    "jsqr": "^1.4.0",
     "lucide-react": "^0.395.0",
     "motion": "^11.2.10",
     "multer": "^1.4.5-lts.1",

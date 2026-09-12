@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useAuth } from "../../context/AuthContext";
-import { AuthShell, fieldClass, labelClass, submitClass } from "./AuthShell";
+import { AuthShell, fieldClass, labelClass, submitClass, submitStyle } from "./AuthShell";
 import { getApiUrl } from "../../services/apiConfig";
 
 export const Login: React.FC<{
@@ -99,7 +99,7 @@ export const Login: React.FC<{
           />
         </div>
 
-        <button type="submit" disabled={loading} className={submitClass}>
+        <button type="submit" disabled={loading} className={submitClass} style={submitStyle}>
           {loading ? "Signing in…" : "Sign in"}
         </button>
       </form>

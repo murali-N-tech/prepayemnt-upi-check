@@ -17,8 +17,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from backend.app.core.upi_limits import cap_for, describe_cap
 from backend.app.services.vpa import (
-    SEVERITY_WEIGHT,
+    graded,
+    total_weight,
+    CANONICAL,
     VpaAnalysis,
     VpaFinding,
     analyse_vpa,
@@ -47,13 +50,14 @@ class QrAnalysis:
     note: Optional[str] = None
     merchant_code: Optional[str] = None
     signed: bool = False
+    embedded_url: Optional[str] = None
     params: dict[str, str] = field(default_factory=dict)
     findings: list[VpaFinding] = field(default_factory=list)
     vpa_analysis: Optional[VpaAnalysis] = None
 
     @property
     def score(self) -> int:
-        own = sum(SEVERITY_WEIGHT[f.severity] for f in self.findings)
+        own = total_weight(self.findings)
         return min(100, own + (self.vpa_analysis.score if self.vpa_analysis else 0))
 
     @property
@@ -66,6 +70,17 @@ def _to_float(value: str | None) -> Optional[float]:
         return float(str(value).strip())
     except (TypeError, ValueError):
         return None
+
+
+def canonical_words(name: str) -> str:
+    """Lower-case and fold look-alikes, but KEEP word boundaries.
+
+    canonical() strips separators, which is right for comparing one address
+    against another and wrong here: the tokens are the evidence.
+    """
+    return "".join(
+        CANONICAL.get(ch, ch) for ch in (name or "").lower()
+    )
 
 
 def parse_upi_target(payload: str) -> QrAnalysis:
@@ -125,9 +140,15 @@ def parse_upi_target(payload: str) -> QrAnalysis:
     result.signed = bool(flat.get("sign"))
 
     amount = _to_float(flat.get("am"))
-    if amount is not None:
+    if amount is not None and amount > 0:
         result.amount = amount
         result.amount_locked = True
+    elif amount is not None and amount < 0:
+        result.findings.append(
+            VpaFinding("negative_amount", "high",
+                       f"The QR asks for a negative amount ({amount}). A genuine "
+                       f"payment request never does.")
+        )
 
     if not result.payee_vpa:
         result.findings.append(
@@ -139,9 +160,13 @@ def parse_upi_target(payload: str) -> QrAnalysis:
     result.vpa_analysis = analyse_vpa(result.payee_vpa)
 
     # 4. An off-platform link inside a payment request.
+    result.embedded_url = unquote(flat["url"]) if flat.get("url") else None
     if flat.get("url"):
         result.findings.append(
-            VpaFinding("embedded_url", "high",
+            # Severity info, not high: scam_link.py now analyses this URL
+            # properly and scores it in its own family. Scoring it here too
+            # counted one fact twice and manufactured "two streams agree".
+            VpaFinding("embedded_url", "info",
                        f"The QR carries a link ({unquote(flat['url'])[:60]}). A payment "
                        f"request does not need one, and opening it is how credentials "
                        f"get taken.")
@@ -153,8 +178,20 @@ def parse_upi_target(payload: str) -> QrAnalysis:
         local = canonical(result.vpa_analysis.local)
         shown = canonical(result.payee_name)
         if shown and local and shown not in local and local not in shown:
-            overlap = len(set(shown) & set(local)) / max(len(set(shown)), 1)
-            if overlap < 0.75:
+            # Token containment, not character overlap.
+            #
+            # The old rule scored the fraction of the displayed name's LETTERS
+            # found anywhere in the address. Unrelated names share letters, so
+            # a long local part covered a short shop name: "Ram Store" against
+            # amitsharma123@ybl scored 0.857 and the mismatch - the QR-overlay
+            # signature this check exists for - was suppressed. Whether any
+            # real word of the name appears in the address is the question
+            # actually being asked.
+            words = [w for w in re.split(r"[^a-z0-9]+", canonical_words(result.payee_name)) if len(w) >= 3]
+            shares_a_word = any(w in local for w in words) or any(
+                local[i:i + 4] in shown for i in range(max(len(local) - 3, 0))
+            )
+            if not shares_a_word:
                 result.findings.append(
                     VpaFinding("name_mismatch", "high",
                                f"The QR displays '{result.payee_name}' but pays "
@@ -178,7 +215,26 @@ def parse_upi_target(payload: str) -> QrAnalysis:
                        f"{', '.join(unknown[:4])}.")
         )
 
-    # 8. Context, not risk.
+    # 8. An amount UPI cannot carry.
+    #    Previously a QR asking for Rs 9,99,99,999 produced exactly one
+    #    finding - "the amount is fixed at Rs 99,999,999.00 by the QR", severity
+    #    info. A request for more than the network permits cannot be honoured by
+    #    any app, so it is not a payment request at all: it is a tampered or
+    #    fabricated QR, and that is the whole point of parsing the payload.
+    #    Checked here, after mc and sign are known, because a signed merchant QR
+    #    in a higher-limit category legitimately goes to Rs 5 lakh.
+    if result.amount is not None:
+        cap = cap_for(result.merchant_code, result.signed)
+        if result.amount > cap:
+            result.findings.append(
+                VpaFinding("amount_over_upi_limit", "critical",
+                           f"This QR demands Rs {result.amount:,.2f}, and UPI does not "
+                           f"carry more than {describe_cap(cap)} in one payment. No real "
+                           f"payment request looks like this - the QR has been tampered "
+                           f"with or fabricated.")
+            )
+
+    # 9. Context, not risk.
     if result.amount_locked:
         result.findings.append(
             VpaFinding("amount_locked", "info",

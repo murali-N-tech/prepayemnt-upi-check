@@ -135,14 +135,22 @@ async function forwardJson(
 ): Promise<{ status: number; body: any }> {
   const payload = JSON.stringify(body ?? {});
   const target = new URL(path, PYTHON_BACKEND);
-  const http = await import("http");
+  // http for a https:// upstream sent a cleartext request to port 80 and the
+  // call simply failed, so PYTHON_BACKEND_URL could only ever be a local
+  // address. Pick the module and the default port from the scheme.
+  const secure = target.protocol === "https:";
+  const http = secure ? await import("https") : await import("http");
 
   return new Promise((resolve, reject) => {
     const req = http.request(
       {
         hostname: target.hostname,
-        port: target.port || 80,
-        path: target.pathname,
+        port: target.port || (secure ? 443 : 80),
+        // pathname alone dropped the query string. /statement-transactions
+        // builds one (page, limit, direction) and every request arrived
+        // upstream without it, so the API silently returned page 1 whatever
+        // the user clicked.
+        path: target.pathname + target.search,
         method,
         headers: {
           ...(method === "POST"
@@ -394,6 +402,28 @@ app.post(
   requireAuth,
   upload.single("file"),
   (req, res) => proxyUpload(req, res, "/statement/upload")
+);
+
+// The intent list the coercion check is built on. This route was never
+// registered, so PayeeCheck.tsx's fetch of it 404'd and the entire "why are
+// you paying?" selector - and every coercion finding that depends on it -
+// was invisible in the UI while the backend implemented it correctly.
+app.get(["/payee/intents", "/api/payee/intents"], (req, res) =>
+  proxyToPython(req, res, "/payee/intents", "GET")
+);
+
+// Whether the assistant has a model behind it. Unauthenticated because the UI
+// asks before sign-in to decide whether to show the chat at all, and the answer
+// is a single boolean about this deployment's own configuration.
+app.get(["/chat/status", "/api/chat/status"], (req, res) =>
+  proxyToPython(req, res, "/chat/status", "GET")
+);
+
+// The assistant. Authenticated: it can see the caller's own payment history,
+// which the Python side looks up from the token rather than accepting from the
+// body, so there is nothing here a client could widen.
+app.post(["/chat", "/api/chat"], requireAuth, (req, res) =>
+  proxyToPython(req, res, "/chat")
 );
 
 app.post(["/payee/check", "/api/payee/check"], requireAuth, (req, res) =>

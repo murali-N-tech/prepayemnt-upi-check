@@ -124,15 +124,30 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     # Skipped when the table still holds duplicates from before the fix -
     # scripts/rebuild_profiles.py cleans those up, and the index is created
     # on the next connection.
+    #
+    # COALESCE, not the bare columns. SQLite treats every NULL as distinct in a
+    # UNIQUE index, so the original index suppressed nothing for the rows that
+    # need it most: a statement line with no reference number (common in PDF
+    # statements) compared unequal to an identical stored row, and every
+    # re-upload inserted the whole file again. Measured: three inserts of the
+    # same NULL-reference row produced three rows under the old index and one
+    # under this one.
     try:
         conn.execute(
             """
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_stmt_tx
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_stmt_tx_v2
             ON statement_transactions(
-                user_id, timestamp, amount, merchant, reference_number
+                user_id,
+                COALESCE(timestamp, ''),
+                amount,
+                COALESCE(merchant, ''),
+                COALESCE(reference_number, '')
             )
             """
         )
+        # The v1 index can only mask the v2 one's job; keep the table's own
+        # dedupe rule in one place.
+        conn.execute("DROP INDEX IF EXISTS ux_stmt_tx")
     except sqlite3.IntegrityError:
         pass
 

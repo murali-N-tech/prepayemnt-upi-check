@@ -4,15 +4,26 @@ The previous implementation was:
 
     score = np.mean([velocity, device_score])
 
-which averages a transaction COUNT (roughly 1-15) with a TRUST SCORE (0-1).
-Velocity dominates the mean by an order of magnitude, so velocity 2 with a
-perfectly ordinary device score of 0.5 gives 1.25 and lands in "High Risk".
-Almost every transaction came back High Risk, which makes the signal useless
-in both directions: it never distinguishes anything, and it trains whoever
-reads it to ignore the field.
+which averages a transaction COUNT (roughly 1-15) with a 0-1 score. Velocity
+dominates the mean by an order of magnitude, so velocity 2 with a perfectly
+ordinary device score of 0.5 gives 1.25 and lands in "High Risk". Almost every
+transaction came back High Risk, which makes the signal useless in both
+directions: it never distinguishes anything, and it trains whoever reads it to
+ignore the field.
 
 Both inputs are put on the same 0-1 scale before they are combined, and the
 weighting is stated rather than implied by an average.
+
+DIRECTION OF device_score
+-------------------------
+It is a RISK score: 0 means a device the payer has used before, 1 means an
+unrecognised one. This module adds it to risk, and /transactions produces it
+from the risk score, so that is the codebase's operative definition - but this
+docstring used to call it a "TRUST SCORE" and the slider in FraudDetection.tsx
+was labelled "Device Trust Score", which is the opposite. Anyone reading either
+one would have set the slider to 1.0 to mean "this is my own phone" and pushed
+the behavioural risk up by 0.4 instead of down. The label is fixed; this note
+exists so the ambiguity does not come back.
 """
 
 from __future__ import annotations
