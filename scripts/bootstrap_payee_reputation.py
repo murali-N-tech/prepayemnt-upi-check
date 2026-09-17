@@ -7,6 +7,7 @@ statements users have already uploaded into a working reputation graph.
     python scripts/bootstrap_payee_reputation.py            # from real history
     python scripts/bootstrap_payee_reputation.py --reset    # rebuild from scratch
     python scripts/bootstrap_payee_reputation.py --with-demo-payees
+    python scripts/bootstrap_payee_reputation.py --demo-statement
 
 --with-demo-payees additionally inserts four clearly named demo-*@* addresses
 that exhibit the patterns the detector looks for. They exist so the feature
@@ -17,6 +18,7 @@ them is prefixed `demo-` and can be removed with --reset.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -116,10 +118,66 @@ def demo_payees(conn) -> None:
     print("  inserted 4 demo payees (demo-mule, demo-fee-collect, demo-reported, demo-chaipoint)")
 
 
+def demo_statement_payees(conn) -> None:
+    """Lay down the crowd around the payees in the demo statement.
+
+    An imported statement is one payer's side of every edge. It cannot say how
+    many OTHER people have paid an address or whether any of them came back,
+    and those are the two facts that separate a busy shop from a collection
+    account. Without this the funnel account in the demo scores like an
+    ordinary new payee, because from a single statement that is all it is.
+
+    The spec lives beside the statement in docs/demo/DEMO_PAYEE_SEED.json so
+    the two cannot drift; regenerate both with scripts/make_demo_statement.py.
+    """
+    spec_path = ROOT / "docs" / "demo" / "DEMO_PAYEE_SEED.json"
+    if not spec_path.exists():
+        print(f"  no seed at {spec_path.relative_to(ROOT)} - run "
+              "python scripts/make_demo_statement.py first")
+        return
+
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    now = datetime.now(timezone.utc)
+    payments = 0
+
+    conn.execute("BEGIN")
+    try:
+        for entry in spec["payees"]:
+            age = float(entry["age_days"])
+            payers = int(entry["other_payers"])
+            each = int(entry["payments_each"])
+            amount = float(entry["typical_amount"])
+            vpa = entry["vpa"]
+            # Spread each payer's visits across the address's life. A payee
+            # whose payments all land at once looks like a burst even when it
+            # is a two-year-old shop, so the timestamps have to be plausible.
+            for i in range(payers):
+                for j in range(each):
+                    offset = age * (1 - (i * each + j) / max(payers * each, 1))
+                    record_payment(
+                        vpa=vpa,
+                        payer_id=f"demo_crowd_{abs(hash(vpa)) % 9973}_{i}",
+                        amount=amount * (0.85 + 0.3 * ((i + j) % 4) / 3),
+                        at=(now - timedelta(days=offset)).isoformat(),
+                        display_name=entry["display_name"],
+                        conn=conn,
+                        autocommit=False,
+                    )
+                    payments += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    print(f"  demo statement: {len(spec['payees'])} payees, {payments:,} crowd payments")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--reset", action="store_true")
     ap.add_argument("--with-demo-payees", action="store_true")
+    ap.add_argument("--demo-statement", action="store_true",
+                    help="seed the counterparty crowd for docs/demo/DEMO_UPI_Statement.pdf")
     ap.add_argument("--db", help="operate on this database file instead of the default")
     args = ap.parse_args()
 
@@ -131,6 +189,8 @@ def main() -> int:
         bootstrap(conn, args.reset)
         if args.with_demo_payees:
             demo_payees(conn)
+        if args.demo_statement:
+            demo_statement_payees(conn)
         print("\n  top payees by distinct payers:")
         for r in conn.execute(
             """SELECT p.vpa, COUNT(*) AS payers, r.payment_count

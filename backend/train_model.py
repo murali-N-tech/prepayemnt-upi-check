@@ -163,6 +163,53 @@ def _fit_and_score(
     }
 
 
+def _strip_fit_only_rng(model, _seen: set[int] | None = None) -> int:
+    """Remove numpy Generator objects from a fitted estimator before it is dumped.
+
+    scikit-learn leaves a ``np.random.Generator`` on a fitted
+    HistGradientBoostingClassifier (``_feature_subsample_rng``). It is used
+    only while fitting; predict never touches it. But it pickles as a PCG64
+    bit generator, and numpy changed how bit generators pickle between 1.x and
+    2.x, so a model trained under numpy 2 fails to load under numpy 1 with:
+
+        <class 'numpy.random._pcg64.PCG64'> is not a known BitGenerator module
+
+    That is the whole failure: nothing about the trained weights is version
+    specific, only this leftover RNG. Dropping it makes the artifact load
+    across numpy majors, which matters here because training and serving are
+    not always the same interpreter.
+
+    Returns the number of attributes removed.
+    """
+    if _seen is None:
+        _seen = set()
+    if id(model) in _seen:
+        return 0
+    _seen.add(id(model))
+
+    removed = 0
+    container = getattr(model, "__dict__", None)
+    if isinstance(container, dict):
+        items = list(container.items())
+    elif isinstance(model, dict):
+        items = list(model.items())
+    elif isinstance(model, (list, tuple)):
+        items = list(enumerate(model))
+    else:
+        return 0
+
+    for key, value in items:
+        if isinstance(value, np.random.Generator):
+            if isinstance(container, dict):
+                del container[key]
+            elif isinstance(model, dict):
+                del model[key]
+            removed += 1
+        else:
+            removed += _strip_fit_only_rng(value, _seen)
+    return removed
+
+
 def train(df: pd.DataFrame | None = None, seed: int = 42) -> dict:
     df = generate(seed=seed) if df is None else df
     y = df[LABEL].to_numpy()
@@ -223,7 +270,9 @@ def train(df: pd.DataFrame | None = None, seed: int = 42) -> dict:
     )
 
     MODELS.mkdir(exist_ok=True)
-    joblib.dump(best.pop("_model"), MODELS / "risk_model.pkl")
+    selected_model = best.pop("_model")
+    stripped = _strip_fit_only_rng(selected_model)
+    joblib.dump(selected_model, MODELS / "risk_model.pkl")
     # SHAP needs a background distribution. np.random.rand() was being used,
     # which explains a prediction against noise rather than against normal
     # traffic, so the attributions meant nothing.
@@ -231,7 +280,11 @@ def train(df: pd.DataFrame | None = None, seed: int = 42) -> dict:
         n=min(200, len(idx_train)), random_state=seed
     )
     background.to_json(MODELS / "shap_background.json", orient="split", index=False)
+    stripped += _strip_fit_only_rng(iso)
     joblib.dump(iso, MODELS / "isolation_forest.pkl")
+    if stripped:
+        print(f"  stripped {stripped} fit-only RNG attribute(s) so the pickle "
+              "loads across numpy versions")
     for d in (baseline, payer_only, payee_only):
         d.pop("_model", None)
 

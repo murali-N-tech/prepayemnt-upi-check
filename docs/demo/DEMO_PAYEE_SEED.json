@@ -1,0 +1,237 @@
+{
+  "note": "Counterparty crowd for docs/demo/DEMO_UPI_Statement.pdf. Ages are in days before the moment of loading, so the file does not go stale. Load with: python scripts/bootstrap_payee_reputation.py --demo-statement",
+  "payees": [
+    {
+      "vpa": "srilakshmi.canteen@ybl",
+      "display_name": "SRI LAKSHMI CANTEEN",
+      "age_days": 900,
+      "other_payers": 60,
+      "payments_each": 9,
+      "typical_amount": 85
+    },
+    {
+      "vpa": "freshmart.store@ibl",
+      "display_name": "FRESHMART SUPERSTORE",
+      "age_days": 1240,
+      "other_payers": 95,
+      "payments_each": 7,
+      "typical_amount": 520
+    },
+    {
+      "vpa": "svkirana@paytm",
+      "display_name": "SRI VENKATESWARA KIRANA",
+      "age_days": 810,
+      "other_payers": 48,
+      "payments_each": 8,
+      "typical_amount": 310
+    },
+    {
+      "vpa": "metroride.trips@ibl",
+      "display_name": "METRO RIDE MOBILITY",
+      "age_days": 1500,
+      "other_payers": 180,
+      "payments_each": 11,
+      "typical_amount": 145
+    },
+    {
+      "vpa": "quickbite.foods@ibl",
+      "display_name": "QUICKBITE FOODS",
+      "age_days": 1120,
+      "other_payers": 150,
+      "payments_each": 8,
+      "typical_amount": 290
+    },
+    {
+      "vpa": "saimedicals@ybl",
+      "display_name": "SAI MEDICALS",
+      "age_days": 960,
+      "other_payers": 40,
+      "payments_each": 5,
+      "typical_amount": 260
+    },
+    {
+      "vpa": "metrofuel42@ibl",
+      "display_name": "METROFUEL PUMP 42",
+      "age_days": 1350,
+      "other_payers": 120,
+      "payments_each": 10,
+      "typical_amount": 900
+    },
+    {
+      "vpa": "irctc.tickets@sbi",
+      "display_name": "IRCTC TICKETING",
+      "age_days": 2200,
+      "other_payers": 300,
+      "payments_each": 4,
+      "typical_amount": 480
+    },
+    {
+      "vpa": "axispower.utility@axl",
+      "display_name": "AXIS POWER UTILITY",
+      "age_days": 2400,
+      "other_payers": 260,
+      "payments_each": 12,
+      "typical_amount": 1400
+    },
+    {
+      "vpa": "fibrenet.billing@axl",
+      "display_name": "BROADBAND FIBRENET",
+      "age_days": 1700,
+      "other_payers": 140,
+      "payments_each": 12,
+      "typical_amount": 799
+    },
+    {
+      "vpa": "cloudnote.sub@ybl",
+      "display_name": "CLOUDNOTE SUBSCRIPTION",
+      "age_days": 1050,
+      "other_payers": 200,
+      "payments_each": 12,
+      "typical_amount": 199
+    },
+    {
+      "vpa": "sipautosave@ybl",
+      "display_name": "SIP AUTOSAVE PLAN",
+      "age_days": 1400,
+      "other_payers": 90,
+      "payments_each": 12,
+      "typical_amount": 2500
+    },
+    {
+      "vpa": "ramanarao.k@oksbi",
+      "display_name": "K RAMANA RAO",
+      "age_days": 900,
+      "other_payers": 4,
+      "payments_each": 12,
+      "typical_amount": 18500
+    },
+    {
+      "vpa": "raviteja.k@oksbi",
+      "display_name": "RAVI TEJA K",
+      "age_days": 700,
+      "other_payers": 9,
+      "payments_each": 6,
+      "typical_amount": 300
+    },
+    {
+      "vpa": "sneha.p@ybl",
+      "display_name": "SNEHA P",
+      "age_days": 650,
+      "other_payers": 11,
+      "payments_each": 5,
+      "typical_amount": 250
+    },
+    {
+      "vpa": "arjun.m@paytm",
+      "display_name": "ARJUN M",
+      "age_days": 720,
+      "other_payers": 8,
+      "payments_each": 6,
+      "typical_amount": 200
+    },
+    {
+      "vpa": "deepthi.r@axl",
+      "display_name": "DEEPTHI R",
+      "age_days": 680,
+      "other_payers": 10,
+      "payments_each": 5,
+      "typical_amount": 350
+    },
+    {
+      "vpa": "quickcash.agency@fastpay",
+      "display_name": "QUICKCASH AGENCY",
+      "age_days": 3,
+      "other_payers": 42,
+      "payments_each": 1,
+      "typical_amount": 4500
+    },
+    {
+      "vpa": "nehru.traders99@fastpay",
+      "display_name": "NEHRU TRADERS ENTERPRISE",
+      "age_days": 6,
+      "other_payers": 2,
+      "payments_each": 1,
+      "typical_amount": 61000
+    },
+    {
+      "vpa": "electricity.billdesk@upiservice",
+      "display_name": "ELECTRICITY BILL DESK",
+      "age_days": 4,
+      "other_payers": 9,
+      "payments_each": 1,
+      "typical_amount": 12500
+    },
+    {
+      "vpa": "hdfcbank.refund@yb1",
+      "display_name": "HDFC BANK REFUND CELL",
+      "age_days": 11,
+      "other_payers": 5,
+      "payments_each": 1,
+      "typical_amount": 39000
+    },
+    {
+      "vpa": "verify01@quickpay",
+      "display_name": "VERIFY01 SERVICES",
+      "age_days": 1,
+      "other_payers": 1,
+      "payments_each": 1,
+      "typical_amount": 12
+    },
+    {
+      "vpa": "verify02@quickpay",
+      "display_name": "VERIFY02 SERVICES",
+      "age_days": 1,
+      "other_payers": 1,
+      "payments_each": 1,
+      "typical_amount": 12
+    },
+    {
+      "vpa": "verify03@quickpay",
+      "display_name": "VERIFY03 SERVICES",
+      "age_days": 1,
+      "other_payers": 1,
+      "payments_each": 1,
+      "typical_amount": 12
+    },
+    {
+      "vpa": "verify04@quickpay",
+      "display_name": "VERIFY04 SERVICES",
+      "age_days": 1,
+      "other_payers": 1,
+      "payments_each": 1,
+      "typical_amount": 12
+    },
+    {
+      "vpa": "verify05@quickpay",
+      "display_name": "VERIFY05 SERVICES",
+      "age_days": 1,
+      "other_payers": 1,
+      "payments_each": 1,
+      "typical_amount": 12
+    },
+    {
+      "vpa": "verify06@quickpay",
+      "display_name": "VERIFY06 SERVICES",
+      "age_days": 1,
+      "other_payers": 1,
+      "payments_each": 1,
+      "typical_amount": 12
+    },
+    {
+      "vpa": "verify07@quickpay",
+      "display_name": "VERIFY07 SERVICES",
+      "age_days": 1,
+      "other_payers": 1,
+      "payments_each": 1,
+      "typical_amount": 12
+    },
+    {
+      "vpa": "verify08@quickpay",
+      "display_name": "VERIFY08 SERVICES",
+      "age_days": 1,
+      "other_payers": 1,
+      "payments_each": 1,
+      "typical_amount": 12
+    }
+  ]
+}
