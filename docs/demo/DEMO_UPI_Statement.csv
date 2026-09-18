@@ -13,7 +13,9 @@ timestamp,counterparty,upi_id,amount,direction,planted_scenario,expected_signal
 2026-09-14 18:41:00,SRI VENKATESWARA KIRANA,svkirana@paytm,321.93,DEBIT,,
 2026-09-14 17:57:00,DEEPTHI R,deepthi.r@axl,200.00,DEBIT,,
 2026-09-14 13:07:00,SRI LAKSHMI CANTEEN,srilakshmi.canteen@ybl,75.00,DEBIT,,
-2026-09-14 03:47:00,NEHRU TRADERS ENTERPRISE,nehru.traders99@fastpay,92400.00,DEBIT,F3,amount vs own median; night; near the cap
+2026-09-14 03:58:00,RK GENERAL SUPPLIES,rk.supplies77@fastpay,38750.00,DEBIT,F3,amount vs own median; night; three transfers in eleven minutes
+2026-09-14 03:52:00,NEHRU TRADERS ENTERPRISE,nehru.traders99@fastpay,92400.00,DEBIT,F3,amount vs own median; night; three transfers in eleven minutes
+2026-09-14 03:47:00,NEHRU TRADERS ENTERPRISE,nehru.traders99@fastpay,49500.00,DEBIT,F3,amount vs own median; night; three transfers in eleven minutes
 2026-09-13 20:29:00,QUICKBITE FOODS PRIVATE LIMITED,quickbite.foods@ibl,443.94,DEBIT,,
 2026-09-13 19:02:00,SAI MEDICALS,saimedicals@ybl,337.74,DEBIT,,
 2026-09-13 18:46:00,QUICKCASH AGENCY,quickcash.agency@fastpay,4500.00,DEBIT,F2,payee 3 days old; no repeat payers; burst

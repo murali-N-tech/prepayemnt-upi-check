@@ -154,6 +154,14 @@
       "typical_amount": 61000
     },
     {
+      "vpa": "rk.supplies77@fastpay",
+      "display_name": "RK GENERAL SUPPLIES",
+      "age_days": 5,
+      "other_payers": 3,
+      "payments_each": 1,
+      "typical_amount": 38750
+    },
+    {
       "vpa": "electricity.billdesk@upiservice",
       "display_name": "ELECTRICITY BILL DESK",
       "age_days": 4,

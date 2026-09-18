@@ -228,11 +228,26 @@ def planted() -> list[Tx]:
                        "QUICKCASH AGENCY", "quickcash.agency@fastpay", 4500, "DEBIT",
                        planted="F2", tags=["payee 3 days old", "no repeat payers", "burst"]))
 
-    # F3 - hijacked profile. One payment far above anything this payer sends,
-    # at an hour they have never used, to an address they have never paid.
-    rows.append(Tx(d(3, 3, 47), "NEHRU TRADERS ENTERPRISE", "nehru.traders99@fastpay",
-                   92400, "DEBIT",
-                   planted="F3", tags=["amount vs own median", "night", "near the cap"]))
+    # F3 - hijacked profile. Someone else is operating the account: three
+    # payments in eleven minutes, each far above anything this payer sends, at
+    # an hour they have never used, to addresses they have never paid.
+    #
+    # This was one lone payment at first, and it was the wrong shape. A
+    # takeover empties an account while the access lasts; it does not send one
+    # transfer and go to bed. The single-row version only scored because the
+    # payee had two payers and a repeat ratio of 0.0 - an empty sample that
+    # happens to look identical to a collection account - so the demo was
+    # leaning on a number that should never have been decisive, and it fell
+    # over the moment thin samples stopped being trusted. Velocity is what
+    # actually identifies this scenario, and now the rows carry it.
+    for i, (mins, amount, payee, vpa) in enumerate([
+        (0, 49500, "NEHRU TRADERS ENTERPRISE", "nehru.traders99@fastpay"),
+        (5, 92400, "NEHRU TRADERS ENTERPRISE", "nehru.traders99@fastpay"),
+        (11, 38750, "RK GENERAL SUPPLIES", "rk.supplies77@fastpay"),
+    ]):
+        rows.append(Tx(d(3, 3, 47) + timedelta(minutes=mins), payee, vpa, amount, "DEBIT",
+                       planted="F3", tags=["amount vs own median", "night",
+                                           "three transfers in eleven minutes"]))
 
     # F4 - victim-authorised transfer. The class the behavioural model is
     # weakest on, and the reason the other channels exist. Ordinary hour,
@@ -298,6 +313,7 @@ PAYEE_CROWD = [
     # The planted ones. Young, wide and shallow: many payers, none returning.
     ("quickcash.agency@fastpay",  "QUICKCASH AGENCY",             3,  42,  1,  4500),
     ("nehru.traders99@fastpay",   "NEHRU TRADERS ENTERPRISE",     6,   2,  1, 61000),
+    ("rk.supplies77@fastpay",     "RK GENERAL SUPPLIES",          5,   3,  1, 38750),
     ("electricity.billdesk@upiservice", "ELECTRICITY BILL DESK",   4,   9,  1, 12500),
     ("hdfcbank.refund@yb1",       "HDFC BANK REFUND CELL",        11,   5,  1, 39000),
 ]

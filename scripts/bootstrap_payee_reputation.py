@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -154,10 +155,18 @@ def demo_statement_payees(conn) -> None:
             for i in range(payers):
                 for j in range(each):
                     offset = age * (1 - (i * each + j) / max(payers * each, 1))
+                    # Spread the amounts properly. An earlier version cycled
+                    # through four fixed multipliers, so every seeded merchant
+                    # charged its whole customer base one of four identical
+                    # prices - which is the signature of a fixed-fee scam, and
+                    # the engine flagged the canteen for it. A real shop's
+                    # takings are dispersed; a collection account's are not,
+                    # and that difference is a signal the seed must not erase.
+                    spread = math.exp(((i * 7 + j * 3) % 23 - 11) / 11.0 * 0.55)
                     record_payment(
                         vpa=vpa,
                         payer_id=f"demo_crowd_{abs(hash(vpa)) % 9973}_{i}",
-                        amount=amount * (0.85 + 0.3 * ((i + j) % 4) / 3),
+                        amount=round(amount * spread, 2),
                         at=(now - timedelta(days=offset)).isoformat(),
                         display_name=entry["display_name"],
                         conn=conn,
@@ -176,6 +185,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--reset", action="store_true")
     ap.add_argument("--with-demo-payees", action="store_true")
+    ap.add_argument("--backfill-graph", action="store_true",
+                    help="build the graph cache from edges already in the store "
+                         "(for deployments whose payee_payers predates it)")
     ap.add_argument("--demo-statement", action="store_true",
                     help="seed the counterparty crowd for docs/demo/DEMO_UPI_Statement.pdf")
     ap.add_argument("--db", help="operate on this database file instead of the default")
@@ -191,6 +203,12 @@ def main() -> int:
             demo_payees(conn)
         if args.demo_statement:
             demo_statement_payees(conn)
+        if args.backfill_graph:
+            from backend.app.services.graph_cache import backfill
+
+            with conn:
+                stats = backfill(conn)
+            print(f"  graph cache: {stats['edges']:,} edges -> {stats['payees']:,} payees")
         print("\n  top payees by distinct payers:")
         for r in conn.execute(
             """SELECT p.vpa, COUNT(*) AS payers, r.payment_count

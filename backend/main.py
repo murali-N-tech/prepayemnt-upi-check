@@ -4,14 +4,17 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(BASE_DIR)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi import File, Form, UploadFile
 from pydantic import BaseModel, field_validator
 import uuid
 import numpy as np
 import pandas as pd
 import shap
-from pathlib import Path
+import re
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from fastapi.security import OAuth2PasswordBearer
 from fastapi import Depends
 
@@ -57,6 +60,8 @@ from backend.app.services.drift_monitor import detect_drift, drift_report
 
 from backend.app.core.security import hash_password, verify_password, create_token, verify_token
 from backend.app.core.upi_limits import check_amount, describe_cap, standard_cap
+from backend.app.core.json_safe import json_safe
+from backend.app.core.verdict import verdict_from_score
 from backend.app.services.profile_store import create_user, get_user_by_username
 
 
@@ -78,6 +83,31 @@ from backend.advanced_ai.gnn_fraud_detector import gnn_risk
 
 
 app = FastAPI()
+
+
+@app.exception_handler(RequestValidationError)
+def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """A refusal that does not repeat what it refused.
+
+    FastAPI's default 422 body carries an `input` field holding the offending
+    value, so the endpoint that declines a one-megabyte payload answered by
+    sending the megabyte back - and the endpoint that rejects a NUL in an
+    address wrote that NUL into its own response. The status code, the
+    `detail` list and its loc/msg/type entries are exactly as before; only the
+    echo and the internal `ctx` object are dropped.
+    """
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": [
+                {"loc": [str(part) for part in error.get("loc", [])],
+                 "msg": str(error.get("msg", ""))[:300],
+                 "type": str(error.get("type", ""))}
+                for error in exc.errors()
+            ]
+        },
+    )
+
 
 # --------------------------------------------------
 # Load ML Model
@@ -194,6 +224,45 @@ class UserAuth(BaseModel):
     password: str
 
 
+# What the API accepts as text, and why there is a limit at all.
+#
+# These fields were unbounded strings. A one-megabyte `payload` was checked in
+# 80ms and echoed back in full, and the same string sent to /payee/confirm
+# becomes the primary key of a reputation row - a megabyte of it, keyed
+# forever. Nothing legitimate is anywhere near these sizes:
+#
+#   a UPI QR is a single upi://pay?... URI, a few hundred bytes
+#   a VPA is an address, not a document
+#   an intent is one of six ids, the longest being "investment"
+#
+# Generous enough that no real input is refused, small enough that no caller
+# can turn one request into a stored megabyte or a 150KB response.
+MAX_PAYLOAD_CHARS = 4_096
+MAX_VPA_CHARS = 255
+MAX_INTENT_CHARS = 64
+MAX_MESSAGE_CHARS = 2_000
+MAX_REASON_CHARS = 500
+MAX_CHAT_CHARS = 4_000
+MAX_CHAT_TURNS = 20
+
+
+def _clean_text(value: str | None, field: str, limit: int) -> str | None:
+    """Reject what cannot be a real address, message or reason.
+
+    NUL in particular: it was accepted as part of a VPA, echoed into the
+    response and would have gone into the store as part of a key. A C string
+    somewhere downstream - a log file, a filename, another service - reads that
+    as the end of the address, so two different payees can become one.
+    """
+    if value is None:
+        return None
+    if len(value) > limit:
+        raise ValueError(f"{field} is too long (limit {limit} characters).")
+    if any(ord(ch) < 32 and ch not in "\t\r\n" for ch in value):
+        raise ValueError(f"{field} contains control characters.")
+    return value
+
+
 class PayeeCheckRequest(BaseModel):
     """`payload` is a scanned QR, a pasted UPI ID, or a phone number."""
     payload: str
@@ -224,10 +293,35 @@ class PayeeCheckRequest(BaseModel):
     # Opt-in, scored in memory, and never stored - see /payee/intents.
     message: str | None = None
 
+    @field_validator("payload")
+    @classmethod
+    def _payload_is_a_payment_address(cls, value: str) -> str:
+        return _clean_text(value, "The scanned or pasted address", MAX_PAYLOAD_CHARS)
+
+    @field_validator("intent")
+    @classmethod
+    def _intent_is_short(cls, value: str | None) -> str | None:
+        return _clean_text(value, "The stated purpose", MAX_INTENT_CHARS)
+
+    @field_validator("message")
+    @classmethod
+    def _message_is_a_message(cls, value: str | None) -> str | None:
+        return _clean_text(value, "The message", MAX_MESSAGE_CHARS)
+
 
 class PayeeReportRequest(BaseModel):
     vpa: str
     reason: str | None = None
+
+    @field_validator("vpa")
+    @classmethod
+    def _vpa_is_an_address(cls, value: str) -> str:
+        return _clean_text(value, "The address", MAX_VPA_CHARS)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_is_short(cls, value: str | None) -> str | None:
+        return _clean_text(value, "The reason", MAX_REASON_CHARS)
 
 
 class ChatTurn(BaseModel):
@@ -247,6 +341,22 @@ class ChatRequest(BaseModel):
     message: str
     history: list[ChatTurn] = []
     check_result: dict | None = None
+
+    @field_validator("message")
+    @classmethod
+    def _question_is_a_question(cls, value: str) -> str:
+        return _clean_text(value, "The question", MAX_CHAT_CHARS)
+
+    @field_validator("history")
+    @classmethod
+    def _history_is_bounded(cls, value: list[ChatTurn]) -> list[ChatTurn]:
+        """A conversation, not a payload. Every turn here is forwarded to the
+        assistant provider, so an unbounded history is someone else's bill."""
+        if len(value) > MAX_CHAT_TURNS:
+            raise ValueError(f"Conversation history is too long (limit {MAX_CHAT_TURNS} turns).")
+        for turn in value:
+            _clean_text(turn.content, "A conversation turn", MAX_CHAT_CHARS)
+        return value
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
@@ -527,7 +637,12 @@ def predict(tx: Transaction, user: str = Depends(get_current_user)):
         "upi_per_transaction_cap": standard_cap(),
         "model": MODEL_METRICS.get("selected", {}).get("model"),
         "fpr_budget": FPR_BUDGET,
-        "features": features,
+        # The features as JSON, which means null where the pipeline holds NaN.
+        # `features` itself is untouched - the model above was handed the real
+        # vector - and payee_history_available still says in the response
+        # whether the payee row was read at all, so an unavailable feature
+        # stays distinguishable from a measured zero.
+        "features": json_safe(features),
         "personalized_assessment": personalized_assessment
     }
 
@@ -599,7 +714,9 @@ def explain(tx_id: str, user: str = Depends(get_current_user)):
     return {
         "transaction_id": tx_id,
         "features": MODEL_FEATURES,
-        "shap_values": shap_values.values.tolist(),
+        # Attributions for a vector that can carry NaN can themselves be
+        # non-finite, and this response has the same JSON boundary as /predict.
+        "shap_values": json_safe(shap_values.values.tolist()),
         "model": MODEL_METRICS.get("selected", {}).get("model"),
     }
 
@@ -764,6 +881,23 @@ def gnn_detection(user: str = Depends(get_current_user)):
 MAX_STATEMENT_BYTES = 10 * 1024 * 1024
 MAX_STATEMENT_ROWS = 20_000
 
+# Filenames legal on both filesystems this runs on, and no path at all.
+_SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _safe_filename(name: str | None) -> str:
+    """A client-supplied filename, reduced to a name.
+
+    PurePosixPath and PureWindowsPath both, because the header is whatever the
+    sender wrote: a Windows client sends backslashes, and a server on Linux
+    would treat "..\\..\\x" as one long filename while a server on Windows
+    would treat it as a path.
+    """
+    candidate = (name or "").strip()
+    candidate = PureWindowsPath(PurePosixPath(candidate).name).name
+    candidate = _SAFE_FILENAME.sub("_", candidate).lstrip(".")
+    return candidate[:120] or "statement"
+
 @app.post("/statement/upload")
 async def upload_statement(
     file: UploadFile = File(...),
@@ -787,7 +921,16 @@ async def upload_statement(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Statement parsing failed: {exc}") from exc
+        # The library's own words ("Stream has ended unexpectedly") described
+        # the server's internals to the client and called a corrupt upload a
+        # 500 - our failure rather than an unreadable file. Logged here, where
+        # it is useful, and answered with what the caller can act on.
+        print(f"[statement] parse failed for {file.filename!r}: {type(exc).__name__}: {exc}")
+        raise HTTPException(
+            status_code=400,
+            detail="This file could not be read as a statement. Export it again "
+                   "from your bank or UPI app and upload the original PDF or CSV.",
+        ) from exc
 
     transactions = parsed["transactions"][:MAX_STATEMENT_ROWS]
     if len(parsed["transactions"]) > MAX_STATEMENT_ROWS:
@@ -824,8 +967,12 @@ async def upload_statement(
     if retain_source:
         uploads_dir = Path("data") / "uploaded_statements"
         uploads_dir.mkdir(parents=True, exist_ok=True)
-        output_name = f"{user_id}_{statement_id}_{file.filename}"
-        (uploads_dir / output_name).write_bytes(content)
+        # The filename comes from the multipart header, which is to say from
+        # whoever sent the request. It was concatenated into the path as given,
+        # so "../../x.csv" was a path and not a name: with the right directory
+        # in place that writes outside the uploads folder, and without one it
+        # raised FileNotFoundError and returned an unexplained 500.
+        (uploads_dir / f"{user_id}_{statement_id}_{_safe_filename(file.filename)}").write_bytes(content)
 
     return {
         "user_id": user_id,
@@ -944,7 +1091,18 @@ def get_transactions(user: str = Depends(get_current_user)):
             "sender": user,
             "receiver": merchant,
             "timestamp": ts,
-            "risk": 1 if score > 50 else 0,
+            # The band comes from the canonical mapping, never from a local
+            # comparison. This row used to publish `risk = score > 50`, a
+            # fourth threshold that belonged to nothing: the monitor rendered
+            # it as BLOCKED/APPROVED, so a score of 60 read as BLOCKED where
+            # the payment path calls 60 a STEP_UP, and a score of 30 read as
+            # APPROVED where the payment path calls 30 a WARN. Same number,
+            # two vocabularies, no shared definition.
+            "verdict": verdict_from_score(score),
+            # Kept for the older monitor table, and derived so it cannot
+            # disagree: anything the canonical bands say needs a human step is
+            # flagged, everything else is not.
+            "risk": 1 if verdict_from_score(score) in {"STEP_UP", "BLOCK"} else 0,
             "risk_score": score
         })
     return txs
@@ -1005,36 +1163,28 @@ def payee_check(payload: PayeeCheckRequest, user: str = Depends(get_current_user
     if not payload.payload.strip():
         raise HTTPException(status_code=400, detail="Nothing to check")
 
-    result = check_payee(
+    # Everything this token is entitled to read, resolved here and handed over.
+    # check_payee performs the whole assembly - every evidence family including
+    # the behavioural classifier, one combination rule, one verdict.
+    #
+    # This endpoint used to run the payer-side rules separately and reconcile
+    # the two results afterwards with `if decision == "APPROVE" and risk_level
+    # == "HIGH": decision = "WARN"`. That was two scoring systems on two
+    # different scales meeting in an if-statement: the damped-max rule and the
+    # agreement bonus never saw the payer's score, so it could not corroborate
+    # anything, and it could only ever nudge one band. It is now a family like
+    # the rest, and the reconciliation is gone.
+    profile = get_behavior_profile(user)
+    return check_payee(
         payload.payload,
         payer_id=user,
         amount=payload.amount,
         intent=payload.intent,
         message=payload.message,
+        profile=profile,
+        history=get_user_transactions(user) if profile else None,
+        timestamp=pd.Timestamp.now().isoformat(),
     )
-
-    # Fold the payer's own baseline in when there is one, so a payment that is
-    # odd FOR THEM still surfaces even if the payee looks fine.
-    profile = get_behavior_profile(user)
-    if profile and payload.amount:
-        history = get_user_transactions(user)
-        personal = evaluate_personalized_risk(
-            profile=profile,
-            history=history,
-            amount=payload.amount,
-            merchant=result["payee"]["display_name"] or result["payee"]["vpa"] or "",
-            timestamp=pd.Timestamp.now().isoformat(),
-            upi_id=result["payee"]["vpa"],
-        )
-        result["payer_behaviour"] = personal
-        # A payee-side BLOCK is never softened by the payer looking normal.
-        if result["decision"] == "APPROVE" and personal["risk_level"] == "HIGH":
-            result["decision"] = "WARN"
-            result["headline"] = "Unusual for you, even though the payee looks fine"
-    else:
-        result["payer_behaviour"] = None
-
-    return result
 
 
 @app.get("/chat/status")
@@ -1080,12 +1230,16 @@ def payee_report(payload: PayeeReportRequest, user: str = Depends(get_current_us
 def payee_confirm(payload: PayeeCheckRequest, user: str = Depends(get_current_user)):
     """Record that the payer went ahead. This is what grows the reputation
     graph: without it the store only ever knows what was uploaded."""
+    profile = get_behavior_profile(user)
     result = check_payee(
         payload.payload,
         payer_id=user,
         amount=payload.amount,
         intent=payload.intent,
         message=payload.message,
+        profile=profile,
+        history=get_user_transactions(user) if profile else None,
+        timestamp=pd.Timestamp.now().isoformat(),
     )
     vpa = result["payee"]["key"]
     if vpa and payload.amount:

@@ -135,7 +135,10 @@ def test_a_link_pushes_a_payment_over_the_line_with_other_streams():
         ),
     )
     assert result["decision"] == "BLOCK"
-    assert "link_safety" in result["agreement"]["families"]
+    # The corroborating entries are FACTS now, not family names: the link
+    # family observes link_reputation.
+    assert "link_reputation" in result["agreement"]["facts"]
+    assert "link_safety" in result["agreement"]["observed_by"]["link_reputation"]
     assert result["links"]["found"] == 1
 
 

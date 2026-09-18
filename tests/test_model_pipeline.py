@@ -10,11 +10,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import math
+
 import numpy as np
 import pytest
 
 from backend.ml.dataset import FEATURES, LABEL, PAYEE_FEATURES, PAYER_FEATURES, generate
-from backend.ml.features import build_features, to_frame
+from backend.ml.features import build_features, build_vector, to_frame
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -78,12 +80,34 @@ def test_column_order_is_fixed_not_dict_order():
     assert to_frame(shuffled).equals(to_frame(f))
 
 
-def test_an_unknown_payee_is_not_reported_as_a_zero_day_account():
-    """Defaulting a missing age to 0 invents the strongest fraud signal there
-    is. An unknown payee must fall back to something population-typical."""
-    f = build_features(amount=500, timestamp="2026-09-09T13:00:00", reputation={})
-    assert f["payee_age_days"] > 0
-    assert f["payee_distinct_payers"] > 0
+def test_an_unknown_payee_reports_no_history_rather_than_a_substitute():
+    """An unknown payee must produce *no* value, not a plausible one.
+
+    This assertion has been through two wrong versions, and both wrongs point
+    the same way. First the code defaulted a missing age to 0, which invents
+    the strongest fraud signal there is: a zero-day-old account. The fix
+    substituted population-typical constants instead - 180 days, 8 payers, a
+    0.4 repeat ratio - and this test asserted `> 0`, which those satisfied.
+
+    But a constant is still an invention. 180 days old with 8 payers describes
+    a payee with a modest real track record, and it was being asserted of every
+    address the system had never seen - including one a mule opened yesterday.
+    The test was passing while the bug it was written to prevent had merely
+    changed shape.
+
+    The contract now is absence: NaN, an availability flag that says so, and
+    nothing the model can mistake for a measurement.
+    """
+    v = build_vector(amount=500, timestamp="2026-09-09T13:00:00", reputation={})
+
+    for name in ("payee_age_days", "payee_distinct_payers", "payee_repeat_ratio"):
+        assert math.isnan(v.values[name]), f"{name} was filled in for an unknown payee"
+        assert v.available[name] is False
+
+    assert v.values["payee_history_available"] == 0.0
+    assert v.payee_history_available is False
+    # The original bug, still guarded: absent must not read as zero.
+    assert v.values["payee_age_days"] != 0
 
 
 def test_known_payee_values_come_from_the_reputation_store():
@@ -117,11 +141,18 @@ def test_a_known_payee_with_no_recorded_age_is_not_called_zero_days_old():
     Guarding on `known` alone let that None become 0.0 - a zero-day-old
     account, which is the strongest mule signal the model has.
     """
-    f = build_features(
+    v = build_vector(
         500, None,
         reputation={"known": True, "age_days": None, "distinct_payers": 3, "repeat_payers": 0},
     )
-    assert f["payee_age_days"] == 180.0
+    assert math.isnan(v.values["payee_age_days"])
+    assert v.available["payee_age_days"] is False
+
+    # Three payers is also below the floor at which a repeat ratio means
+    # anything: three people who each paid once give a ratio of exactly 0.0,
+    # which is the signature of a collection account and is actually an empty
+    # sample. Both reasons point at the same answer - say nothing.
+    assert math.isnan(v.values["payee_repeat_ratio"])
 
 
 def test_the_amount_ratio_uses_the_median_the_model_was_trained_on():

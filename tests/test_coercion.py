@@ -18,7 +18,29 @@ from backend.app.services.coercion import (
     extract_features,
 )
 from backend.app.services.intent import analyse_intent
-from backend.app.services.payee_check import _agreement_bonus, check_payee
+from backend.app.services.evidence import Evidence, Fact, Family, agreement_bonus
+from backend.app.services.payee_check import check_payee
+
+
+# Canonical fact per family, so these rows corroborate the way the real ones
+# do: the bonus counts distinct observations, not modules, so a row with no
+# fact declared can never agree with anything.
+_FACT = {
+    "message_pressure": Fact.MESSAGE_COERCION,
+    "payee_history": Fact.PAYEE_SHAPE,
+    "address_and_qr": Fact.ADDRESS_INTEGRITY,
+    "link_safety": Fact.LINK_REPUTATION,
+    "amount_context": Fact.AMOUNT_ABSOLUTE,
+}
+
+
+def _ev(**scores):
+    """Family scores as the typed rows the bonus now takes."""
+    return [
+        Evidence(family=Family(name), available=True, score=score, severity="warn",
+                 facts=frozenset({_FACT[name]}))
+        for name, score in scores.items()
+    ]
 
 
 # ── Pattern extraction ────────────────────────────────────────────────────────
@@ -151,12 +173,12 @@ def test_unknown_intent_is_ignored_rather_than_guessed():
 
 # ── Fusion ────────────────────────────────────────────────────────────────────
 
-def test_agreement_counts_families_not_findings():
+def test_agreement_counts_distinct_facts_not_findings():
     """Four scam patterns in one message are still one family, not four."""
-    bonus, agreeing = _agreement_bonus({"message_pressure": 90, "payee_history": 5})
-    assert agreeing == ["message_pressure"] and bonus == 0
+    bonus, agreeing = agreement_bonus(_ev(message_pressure=90, payee_history=5))
+    assert agreeing == ["message_coercion"] and bonus == 0
 
-    bonus, agreeing = _agreement_bonus({"message_pressure": 90, "payee_history": 40})
+    bonus, agreeing = agreement_bonus(_ev(message_pressure=90, payee_history=40))
     assert len(agreeing) == 2 and bonus > 0
 
 
@@ -196,7 +218,7 @@ def test_agreeing_streams_reach_block_where_no_single_stream_would():
         ),
     )
     assert result["decision"] == "BLOCK"
-    assert len(result["agreement"]["families"]) >= 2
+    assert len(result["agreement"]["facts"]) >= 2
     assert any(f["code"] == "streams_agree" for f in result["findings"])
 
 

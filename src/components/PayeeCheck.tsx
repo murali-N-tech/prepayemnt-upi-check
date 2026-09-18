@@ -188,7 +188,16 @@ export default function PayeeCheck() {
     }
   };
 
-  const meta = result ? DECISION_META[result.decision] ?? DECISION_META.WARN : null;
+  const meta = result ? DECISION_META[result.verdict] ?? DECISION_META.WARN : null;
+
+  // The bonus counts distinct OBSERVATIONS, bounded by the number of families
+  // that made them: four facts seen by three families is three streams
+  // agreeing, not four. `observed_by` is what says which, so the headline
+  // counts families and the chips name the observations.
+  const agreeingFacts = result?.agreement?.facts ?? [];
+  const agreeingStreams =
+    new Set(Object.values(result?.agreement?.observed_by ?? {}).flat()).size ||
+    agreeingFacts.length;
   const rep  = result?.reputation;
 
   return (
@@ -464,7 +473,7 @@ export default function PayeeCheck() {
                   </span>
                   <div>
                     <h3 className="text-2xl font-extrabold" style={{ color: "var(--ink)" }}>
-                      {DECISION_LABEL[result.decision] ?? result.decision}
+                      {DECISION_LABEL[result.verdict] ?? result.verdict}
                     </h3>
                     <p className="text-sm mt-1" style={{ color: "var(--ink-muted)" }}>{result.headline}</p>
                     {result.payee.vpa && (
@@ -486,7 +495,7 @@ export default function PayeeCheck() {
               </div>
 
               {/* Agreement bonus */}
-              {result.agreement?.bonus > 0 && (
+              {(result.agreement?.bonus ?? 0) > 0 && (
                 <div
                   className="rounded-2xl p-5"
                   style={{
@@ -495,14 +504,14 @@ export default function PayeeCheck() {
                   }}
                 >
                   <h3 className="text-sm font-bold mb-1" style={{ color: "var(--ink)" }}>
-                    {result.agreement.families.length} independent checks agree
+                    {agreeingStreams} independent check{agreeingStreams === 1 ? "" : "s"} agree
                   </h3>
                   <p className="text-xs leading-relaxed mb-3" style={{ color: "var(--ink-muted)" }}>
                     None of these alone would produce this verdict. They point the same
                     way, and that is what makes it a decision rather than a guess.
                   </p>
                   <div className="flex flex-wrap gap-1.5">
-                    {result.agreement.families.map((family) => (
+                    {agreeingFacts.map((family) => (
                       <span
                         key={family}
                         className="px-2.5 py-1 rounded-lg text-[11px] font-semibold"
@@ -744,11 +753,17 @@ export default function PayeeCheck() {
                     );
                   })}
                 </div>
-                {result.payer_behaviour && (
+                {/* `payer_behaviour` is an evidence row; the payer's own
+                    assessment is under `detail`. Reading risk_score off the row
+                    itself printed "undefined (undefined)", and the label it
+                    reached for was the legacy LOW/MEDIUM/HIGH one - the band
+                    below is the same vocabulary as the verdict at the top. */}
+                {result.payer_behaviour?.detail && (
                   <p className="text-xs mt-4 pt-4 border-t" style={{ borderColor: "var(--line)", color: "var(--ink-subtle)" }}>
                     Against your own history this payment scores{" "}
                     <span className="font-bold" style={{ color: "var(--ink-muted)" }}>
-                      {result.payer_behaviour.risk_score} ({result.payer_behaviour.risk_level})
+                      {result.payer_behaviour.detail.risk_score}
+                      {result.payer_behaviour.detail.band ? ` (${result.payer_behaviour.detail.band})` : ""}
                     </span>.
                   </p>
                 )}

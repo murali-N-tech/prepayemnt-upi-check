@@ -53,6 +53,11 @@ FEATURES: list[str] = [
     "payee_age_days",
     "payee_distinct_payers",
     "payee_repeat_ratio",
+    # Whether the three features above could be measured at all. It is a
+    # feature and not just bookkeeping: the model needs to be able to say
+    # "I am reading a repeat ratio of 0.0" differently from "I have no
+    # repeat ratio", and those are the same number without this column.
+    "payee_history_available",
 ]
 
 LABEL = "is_fraud"
@@ -75,6 +80,7 @@ PAYEE_FEATURES: list[str] = [
     "payee_age_days",
     "payee_distinct_payers",
     "payee_repeat_ratio",
+    "payee_history_available",
 ]
 
 
@@ -377,6 +383,106 @@ SCENARIO_MIX = {
 }
 
 
+
+# ── Observation coverage ─────────────────────────────────────────────────────
+# Every earlier version of this generator gave every row a full set of payee
+# features, so the model was trained in a world where a payee's history is
+# always knowable. Serving is not that world. This deployment sees an address
+# only when one of its own users has paid it, and for a first-time payer that
+# is usually never.
+#
+# The pipeline used to paper over the gap by substituting constants for the
+# missing values - 180 days old, 8 payers, a 0.4 repeat ratio - which is a
+# description of a moderately established payee. Every unknown address was
+# therefore scored as though it had a modest but real track record. That is
+# the single most dangerous default a fraud system can hold, because a mule
+# account's entire defining property is that it has no track record, and the
+# code was inventing one for it.
+#
+# So the generator now hides payee history on a fraction of rows and the
+# features carry NaN there. Two properties are required of how that fraction
+# is chosen, and they pull against each other:
+#
+#   The mask must be REALISTIC. Coverage genuinely depends on how many people
+#   pay an address: a busy merchant is likely to have been seen by one of our
+#   users, a four-day-old address is not. So coverage rises with payer count.
+#
+#   The mask must not ENCODE THE LABEL. If unobserved rows were mostly fraud,
+#   the model would learn "unknown payee = fraud" and warn on every genuine
+#   first payment to a stranger, which is most first payments. If they were
+#   mostly legitimate it would learn "unknown = safe", which is worse. Neither
+#   is a thing the data can support, and tests/test_evidence_availability.py
+#   asserts the gap stays inside a stated band.
+#
+# The residual correlation that survives is real and deliberate: an address
+# too new to have been observed is, in fact, somewhat more likely to be a
+# collection account. Withholding the payee features is exactly the right
+# response to that - the model falls back to the payer's own behaviour rather
+# than reading a number we made up.
+
+PAYEE_HISTORY_FEATURES: list[str] = [
+    "payee_age_days",
+    "payee_distinct_payers",
+    "payee_repeat_ratio",
+]
+
+# Half-saturation point. A payee with this many distinct payers is observed
+# about half the time; the curve rises from there. Tuned so that neither the
+# observed nor the unobserved group is small enough to be unlearnable.
+COVERAGE_HALF_PAYERS = 9.0
+
+
+def _coverage_probability(distinct_payers: np.ndarray) -> np.ndarray:
+    """Probability this deployment has seen the payee, from payer count alone.
+
+    A saturating curve, not a threshold: coverage is a matter of degree, and a
+    hard cutoff would put a discontinuity in the training data that the model
+    would happily learn as a rule about the world.
+    """
+    payers = np.clip(distinct_payers.astype(float), 0.0, None)
+    return payers / (payers + COVERAGE_HALF_PAYERS)
+
+
+def apply_observation_mask(df: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
+    """Hide payee history where the deployment would not have it.
+
+    Operates on the frame in place and returns it. The masked features become
+    NaN rather than any sentinel value: HistGradientBoostingClassifier routes
+    NaN down whichever branch the training data supports, so "unavailable"
+    becomes something the model learns a response to instead of something that
+    silently reads as a number.
+    """
+    from backend.app.core.entity_status import MIN_PAYERS_FOR_SHAPE
+
+    payers = df["payee_distinct_payers"].to_numpy()
+    observed = rng.random(len(df)) < _coverage_probability(payers)
+    df["payee_history_available"] = observed.astype(float)
+
+    # No reputation row at all: nothing about the payee is knowable.
+    df.loc[~observed, PAYEE_HISTORY_FEATURES] = np.nan
+
+    # A row exists, but too few payers for a repeat ratio to be an estimate of
+    # anything. The counts stay - an address six days old with two payers is
+    # exactly that, and those are the two features a young collection account
+    # gives itself away on. Only the ratio waits for a sample worth the name.
+    thin = observed & (payers < MIN_PAYERS_FOR_SHAPE)
+    df.loc[thin, "payee_repeat_ratio"] = np.nan
+    return df
+
+
+def availability_bias(df: pd.DataFrame) -> float:
+    """P(fraud | history hidden) - P(fraud | history available).
+
+    The number that says whether the mask leaked the label. Near zero means
+    the model cannot use availability itself as a shortcut and has to read the
+    evidence. Reported by train_model.py on every run.
+    """
+    hidden = df["payee_history_available"] == 0.0
+    if not hidden.any() or hidden.all():
+        return 0.0
+    return float(df.loc[hidden, LABEL].mean() - df.loc[~hidden, LABEL].mean())
+
+
 def generate(
     n_transactions: int = 120_000,
     fraud_rate: float = 0.012,
@@ -413,7 +519,8 @@ def generate(
             labels.append(0)
             kinds.append("legitimate")
 
-    df = pd.DataFrame(rows, columns=FEATURES)
+    df = pd.DataFrame(rows, columns=[c for c in FEATURES if c != "payee_history_available"])
     df[LABEL] = labels
     df["scenario"] = kinds
-    return df
+    df = apply_observation_mask(df, rng)
+    return df[FEATURES + [LABEL, "scenario"]]

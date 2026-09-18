@@ -52,6 +52,7 @@ from sklearn.metrics import (  # noqa: E402
     roc_curve,
 )
 from sklearn.model_selection import train_test_split  # noqa: E402
+from sklearn.impute import SimpleImputer  # noqa: E402
 from sklearn.pipeline import Pipeline  # noqa: E402
 from sklearn.preprocessing import StandardScaler  # noqa: E402
 
@@ -61,6 +62,7 @@ import sklearn  # noqa: E402
 
 from backend.ml.dataset import (  # noqa: E402
     FEATURES,
+    availability_bias,
     LABEL,
     PAYEE_FEATURES,
     PAYER_FEATURES,
@@ -232,7 +234,19 @@ def train(df: pd.DataFrame | None = None, seed: int = 42) -> dict:
     def subset(cols):
         return df[cols].iloc[idx_train], df[cols].iloc[idx_val], df[cols].iloc[idx_test]
 
+    # The payee-history features are NaN wherever the deployment would not
+    # have observed the payee (dataset.apply_observation_mask). Only the
+    # boosted model reads NaN natively; the linear baseline and the anomaly
+    # detector need it filled in, so they get the standard remedy, a median
+    # imputer. That handicap is not an accident of implementation - it is part
+    # of what the comparison measures. A linear model cannot represent "this
+    # value is absent" at all, so it has to be told the payee is average, and
+    # being told the payee is average is exactly the failure this whole change
+    # set exists to remove.
+    impute = lambda: SimpleImputer(strategy="median")               # noqa: E731
+
     linear = lambda: Pipeline([                                    # noqa: E731
+        ("impute", impute()),
         ("scale", StandardScaler()),
         ("clf", LogisticRegression(max_iter=2000, class_weight="balanced")),
     ])
@@ -261,12 +275,13 @@ def train(df: pd.DataFrame | None = None, seed: int = 42) -> dict:
     # Unsupervised half, fitted on legitimate traffic only. An anomaly
     # detector should model normal, not a mixture of normal and fraud.
     iso = Pipeline([
+        ("impute", impute()),
         ("scale", StandardScaler()),
         ("iso", IsolationForest(contamination=0.02, random_state=seed, n_estimators=200)),
     ])
     iso.fit(X_train[y_train == 0])
     iso_scores = -iso.named_steps["iso"].score_samples(
-        iso.named_steps["scale"].transform(X_test)
+        iso.named_steps["scale"].transform(iso.named_steps["impute"].transform(X_test))
     )
 
     MODELS.mkdir(exist_ok=True)
@@ -291,7 +306,28 @@ def train(df: pd.DataFrame | None = None, seed: int = 42) -> dict:
     def se(d):
         return d["recall_by_scenario"].get("social_engineering", {}).get("recall", 0.0)
 
+    hidden = df["payee_history_available"] == 0.0
+    bias = availability_bias(df)
+
     metrics = {
+        # Whether the observation mask leaked the label. If the model can tell
+        # fraud from "we have no payee history" alone, it will warn on every
+        # genuine first payment to a stranger, and the availability work has
+        # made things worse rather than better.
+        "evidence_availability": {
+            "payee_history_hidden_rows": int(hidden.sum()),
+            "payee_history_hidden_share": round(float(hidden.mean()), 4),
+            "fraud_rate_when_hidden": round(float(df.loc[hidden, LABEL].mean()), 5),
+            "fraud_rate_when_available": round(float(df.loc[~hidden, LABEL].mean()), 5),
+            "availability_bias": round(bias, 5),
+            "reading": (
+                "Positive bias means an unobserved payee is somewhat more "
+                "likely to be fraudulent, which is true of the world and is "
+                "why the payee features are withheld rather than guessed. It "
+                "must stay small: a large value would mean the model can use "
+                "'unknown' as a proxy for 'fraud'."
+            ),
+        },
         # Recorded so a load failure elsewhere can say what changed. A pickle
         # is tied to the versions that produced it.
         "environment": {

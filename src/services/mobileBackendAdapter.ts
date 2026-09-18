@@ -1,6 +1,7 @@
 // Client-side Offline Engine for Mobile & Capacitor execution when disconnected from backend server
 
 import { BehaviorProfile, StatementTransaction, PersonalizedAssessment } from "../types";
+import { levelFromScore, type RiskLevel } from "../lib/verdict";
 
 const LOCAL_TXS_KEY = "edge_upi_mobile_statement_txs";
 const LOCAL_PROFILE_KEY = "edge_upi_mobile_profiles";
@@ -184,7 +185,10 @@ export function evaluateLocalRisk(
   }
 
   const finalScore = Math.min(99, Math.max(5, risk_score));
-  const risk_level: "LOW" | "MEDIUM" | "HIGH" = finalScore >= 65 ? "HIGH" : finalScore >= 35 ? "MEDIUM" : "LOW";
+  // The server's bands, from the one mirror of them. This line used to read
+  // `finalScore >= 65 ? "HIGH" : finalScore >= 35 ? "MEDIUM" : "LOW"`, a third
+  // ladder that agreed with neither the payment path nor the payer family.
+  const risk_level: RiskLevel = levelFromScore(finalScore);
 
   return {
     risk_score: finalScore,

@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from backend.app.services.profile_store import _get_connection
+from backend.app.services.graph_cache import observe_edge
 from backend.app.services.vpa import (
     VpaFinding,
     graded,
@@ -76,6 +77,11 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS ix_payers_vpa ON payee_payers(vpa)")
+    # Graph structures live alongside the edges they are derived from, and are
+    # written in the same transaction, so they cannot disagree with them.
+    from backend.app.services.graph_cache import ensure_schema as _graph_schema
+
+    _graph_schema(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS ix_reports_vpa ON payee_reports(vpa)")
     conn.commit()
 
@@ -195,6 +201,11 @@ def record_payment(
                 """,
                 (key, payer_id, when, when),
             )
+            # Same transaction as the two upserts above. Committing an edge
+            # and failing its graph structures would leave a payee whose
+            # cached shape says it has fewer payers than the edge table holds,
+            # and nothing downstream could detect the disagreement.
+            observe_edge(conn, key, payer_id)
         except Exception:
             if autocommit:
                 conn.rollback()

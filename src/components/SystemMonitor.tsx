@@ -208,12 +208,17 @@ export default function SystemMonitor() {
                       {t.device_score.toFixed(2)} / {t.location_score.toFixed(2)} / {t.velocity_score}
                     </td>
                     <td className="py-3 px-4">
+                      {/* The server's band, in the server's words. This cell
+                          used to print BLOCKED or APPROVED from the `risk`
+                          flag, which is neither of the four bands the rest of
+                          the product speaks and read as a decision the system
+                          never made. */}
                       <span className={`px-2.5 py-0.5 rounded font-sans font-bold text-[10px] uppercase border ${
-                        t.risk === 1 
-                          ? "bg-rose-500/10 border-rose-500/20 text-danger" 
+                        t.risk === 1
+                          ? "bg-rose-500/10 border-rose-500/20 text-danger"
                           : "bg-emerald-500/10 border-emerald-500/20 text-ok"
                       }`}>
-                        {t.risk === 1 ? "BLOCKED" : "APPROVED"}
+                        {t.verdict ?? "UNKNOWN"}
                       </span>
                     </td>
                   </tr>

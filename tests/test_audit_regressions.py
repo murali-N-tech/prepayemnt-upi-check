@@ -128,12 +128,15 @@ def test_payee_distinct_payers_is_a_whole_number_in_both_classes():
 
     df = generate(n_transactions=20_000, seed=3)
     counts = df["payee_distinct_payers"].to_numpy()
-    assert np.all(counts % 1 == 0), "a count came out fractional"
 
-    # And the leak is gone as a predictor: the fractional test carries no
-    # information because there is nothing fractional left.
-    fractional = counts % 1 != 0
-    assert fractional.sum() == 0
+    # NaN rows are payees this deployment never observed, and are excluded on
+    # purpose: "no count" is a different thing from "a fractional count", and
+    # only the second was ever the bug. Asserting over NaN here would make the
+    # test fail for the availability work rather than for the leak it guards.
+    measured = counts[~np.isnan(counts)]
+    assert measured.size > 0, "every count was masked - the mask is too aggressive"
+    assert np.all(measured % 1 == 0), "a count came out fractional"
+    assert (measured % 1 != 0).sum() == 0
 
 
 def test_no_single_feature_separates_the_classes_perfectly():
@@ -145,8 +148,18 @@ def test_no_single_feature_separates_the_classes_perfectly():
 
     df = generate(n_transactions=20_000, seed=3)
     y = df["is_fraud"].to_numpy()
-    worst = max(
-        (max(roc_auc_score(y, df[f]), 1 - roc_auc_score(y, df[f])), f) for f in FEATURES
-    )
-    auc, name = worst
+
+    scored = []
+    for f in FEATURES:
+        column = df[f].to_numpy()
+        seen = ~np.isnan(column)
+        # Score each feature on the rows where it was measured. A feature that
+        # is absent on a quarter of rows still has to be non-leaking on the
+        # rest, and scoring it over NaN would just error.
+        if seen.sum() < 100 or len(set(y[seen])) < 2:
+            continue
+        auc = roc_auc_score(y[seen], column[seen])
+        scored.append((max(auc, 1 - auc), f))
+
+    auc, name = max(scored)
     assert auc < 0.95, f"{name} alone reaches ROC-AUC {auc:.4f} - the label is leaking"

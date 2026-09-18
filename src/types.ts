@@ -1,3 +1,9 @@
+import type { RiskLevel, Verdict } from "./lib/verdict";
+
+// `Verdict` is the canonical risk band and `RiskLevel` the legacy
+// LOW / MEDIUM / HIGH label the older panels still render. Both come from
+// lib/verdict so no view can spell a band its own way.
+
 export interface Transaction {
   transaction_id: string;
   amount: number;
@@ -7,6 +13,10 @@ export interface Transaction {
   sender: string;
   receiver: string;
   timestamp: string;
+  // The canonical band for this row, decided by the server.
+  verdict?: Verdict;
+  // Legacy flag the monitor table renders. The server derives it from
+  // `verdict`, so the two cannot disagree.
   risk: number;
   risk_score: number;
 }
@@ -41,7 +51,12 @@ export interface BehaviorProfile {
 
 export interface PersonalizedAssessment {
   risk_score: number;
-  risk_level: "LOW" | "MEDIUM" | "HIGH";
+  // This family's own sub-score in the canonical vocabulary. It is not the
+  // payment's verdict - that comes from the payee check, once every family has
+  // been combined.
+  band?: Verdict;
+  // Legacy label, derived from `band` server-side.
+  risk_level: RiskLevel;
   reasons: string[];
   comparison: {
     average_amount?: number;
@@ -103,6 +118,19 @@ export interface PayeeReputation {
   blocked: boolean;
 }
 
+/** One evidence family's row, as the payee check publishes it. The payer's own
+ *  assessment sits under `detail`; the family's contribution to the combined
+ *  score is `score`, on a different scale, and the two are not interchangeable. */
+export interface PayerBehaviourEvidence {
+  available: boolean;
+  score: number | null;
+  severity: string | null;
+  code: string;
+  message?: string | null;
+  facts?: string[];
+  detail: PersonalizedAssessment | null;
+}
+
 export interface PayeeCheckResult {
   input: string;
   input_kind: string;
@@ -123,7 +151,10 @@ export interface PayeeCheckResult {
   };
   reputation: PayeeReputation | null;
   risk_score: number;
-  decision: "APPROVE" | "WARN" | "STEP_UP" | "BLOCK";
+  // The canonical classification. `decision` is the same value under the name
+  // the first version of this screen read, and is kept only for that.
+  verdict: Verdict;
+  decision: Verdict;
   headline: string;
   component_scores: {
     address_and_qr: number;
@@ -163,9 +194,19 @@ export interface PayeeCheckResult {
       findings: PayeeFinding[];
     }[];
   };
-  agreement: { families: string[]; bonus: number };
+  // What corroborated, and who saw each thing. `facts` are the distinct
+  // observations; `observed_by` maps each one to the families that reported it.
+  // This used to be `{ families: string[] }` - the fact-aware corroboration
+  // change renamed it server-side and this type was not updated, so the screen
+  // read `agreement.families.length` off undefined and crashed on exactly the
+  // payments that corroborate.
+  agreement: {
+    facts: string[];
+    bonus: number;
+    observed_by?: Record<string, string[]>;
+  };
   findings: PayeeFinding[];
-  payer_behaviour: PersonalizedAssessment | null;
+  payer_behaviour: PayerBehaviourEvidence | null;
 }
 
 export interface IntentOption {

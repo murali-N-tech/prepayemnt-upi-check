@@ -24,7 +24,7 @@ Without the seed the funnel account scores like any other new payee.
 ## What is in the file
 
 - Period: the 92 days ending the day it was generated
-- 286 rows over 27 pages: 269 ordinary, 17 planted
+- 288 rows over 27 pages: 269 ordinary, 19 planted
 - Median ordinary payment: Rs 222
 - Persona: salaried, pays rent monthly, buys groceries, takes cabs, has four
   friends who pay them back and an employer who pays them
@@ -58,7 +58,7 @@ One address opened three days earlier takes 5 x Rs 4,500 in 44 minutes and sends
 
 ### F3 - Hijacked profile
 
-**14 Sep 2026, 03:47 AM** &middot; 1 row(s) &middot; Rs 92,400
+**14 Sep 2026, 03:47 AM** &middot; 3 row(s) &middot; Rs 180,650
 
 Rs 92,400 at 03:47 to an address never paid before - far above anything this payer sends, at an hour they have never used.
 
